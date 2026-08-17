@@ -1,0 +1,36 @@
+{
+  "name": "document-to-markdown",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fontsource/dm-mono": "^5.2.6",
+    "@fontsource/manrope": "^5.2.6",
+    "@fontsource/playfair-display": "^5.2.6",
+    "dompurify": "^3.2.6",
+    "jszip": "^3.10.1",
+    "katex": "^0.16.22",
+    "mammoth": "^1.9.1",
+    "marked": "^15.0.12",
+    "pdfjs-dist": "^6.2.108",
+    "tesseract.js": "^6.0.1",
+    "turndown": "^7.2.0",
+    "turndown-plugin-gfm": "^1.0.2",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "@types/turndown": "^5.0.5",
+    "jsdom": "^26.1.0",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.1.4"
+  }
+}

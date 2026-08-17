@@ -40,7 +40,9 @@ function minimalPdf(lines: string[]): ArrayBuffer {
 describe('PDF converter', () => {
   it('reads native PDF text without OCR or page rasterisation', async () => {
     Object.defineProperty(globalThis, 'DOMMatrix', { value: TestDOMMatrix, configurable: true });
+    Reflect.deleteProperty(Promise, 'try');
     const { convertPdf } = await import('../converters/pdf');
+    expect(typeof (Promise as PromiseConstructor & { try?: unknown }).try).toBe('function');
     const pdfjs = await import('pdfjs-dist');
     pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(resolve('node_modules/pdfjs-dist/build/pdf.worker.min.mjs')).href;
     const buffer = minimalPdf(['Convergence theorem', 'The iterates converge monotonically.']);

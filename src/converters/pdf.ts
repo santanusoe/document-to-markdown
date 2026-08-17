@@ -1,3 +1,4 @@
+import '../polyfills';
 import * as pdfjs from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { Asset, ConverterContext, Metric } from '../types';
@@ -11,31 +12,6 @@ import {
 } from '../utils/markdown';
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-
-const byteArrayPrototype = Uint8Array.prototype as Uint8Array & { toHex?: () => string };
-if (!byteArrayPrototype.toHex) {
-  Object.defineProperty(byteArrayPrototype, 'toHex', {
-    configurable: true,
-    value(this: Uint8Array): string {
-      return Array.from(this, (byte) => byte.toString(16).padStart(2, '0')).join('');
-    },
-  });
-}
-
-const mapPrototype = Map.prototype as Map<unknown, unknown> & {
-  getOrInsertComputed?: (key: unknown, callback: (key: unknown) => unknown) => unknown;
-};
-if (!mapPrototype.getOrInsertComputed) {
-  Object.defineProperty(mapPrototype, 'getOrInsertComputed', {
-    configurable: true,
-    value(this: Map<unknown, unknown>, key: unknown, callback: (key: unknown) => unknown): unknown {
-      if (this.has(key)) return this.get(key);
-      const value = callback(key);
-      this.set(key, value);
-      return value;
-    },
-  });
-}
 
 type PdfLoadingTask = ReturnType<typeof pdfjs.getDocument>;
 type PdfDocument = Awaited<PdfLoadingTask['promise']>;

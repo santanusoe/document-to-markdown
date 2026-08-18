@@ -31,6 +31,9 @@ describe('Converter interface', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('.success-kicker')?.textContent).toContain('Conversion complete');
     }, { timeout: 5_000 });
+    expect(document.querySelector('[data-preview] table')).not.toBeNull();
+    expect(document.querySelector('[data-preview] .katex-display')).not.toBeNull();
+    expect(document.querySelector('[data-preview] .katex-error')).toBeNull();
     const sourceTab = document.querySelector<HTMLButtonElement>('[data-tab="markdown"]');
     sourceTab?.click();
     const source = document.querySelector<HTMLTextAreaElement>('[data-source]');

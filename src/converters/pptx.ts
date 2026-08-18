@@ -53,10 +53,15 @@ function runText(run: Element): string {
 }
 
 function paragraphText(paragraph: Element): string {
-  const runs = localElements(paragraph, 'r').map(runText);
-  const fields = localElements(paragraph, 'fld').map((field) => localElements(field, 't').map((node) => node.textContent ?? '').join(''));
-  const equations = localElements(paragraph, 'oMath').map((equation) => `$${ommlToLatex(equation)}$`);
-  const text = [...runs, ...fields, ...equations].join('').trim();
+  const fragments = Array.from(paragraph.children).map((node) => {
+    if (node.localName === 'r') return runText(node);
+    if (node.localName === 'fld') return localElements(node, 't').map((text) => text.textContent ?? '').join('');
+    if (node.localName === 'oMath') return `$${ommlToLatex(node)}$`;
+    if (node.localName === 'oMathPara') return `$$\n${ommlToLatex(node)}\n$$`;
+    if (node.localName === 'br') return '\n';
+    return '';
+  });
+  const text = fragments.join('').trim();
   const properties = firstLocal(paragraph, 'pPr');
   const level = Number(attrLocal(properties ?? paragraph, 'lvl') ?? 0);
   const isBullet = Boolean(properties && (firstLocal(properties, 'buChar') || firstLocal(properties, 'buAutoNum')));
@@ -69,12 +74,41 @@ function shapePosition(shape: Element): [number, number] {
 }
 
 function tableFromFrame(frame: Element): string {
-  const rows = localElements(frame, 'tr').map((row) =>
+  const rowElements = localElements(frame, 'tr');
+  const complex = rowElements.some((row) => localElements(row, 'tc').some((cell) => (
+    Number(attrLocal(cell, 'gridSpan') ?? 1) > 1 ||
+    Number(attrLocal(cell, 'rowSpan') ?? 1) > 1 ||
+    ['1', 'true'].includes(attrLocal(cell, 'hMerge') ?? '') ||
+    ['1', 'true'].includes(attrLocal(cell, 'vMerge') ?? '')
+  )));
+  const rows = rowElements.map((row) =>
     localElements(row, 'tc').map((cell) =>
-      localElements(cell, 'p').map(paragraphText).filter(Boolean).join('<br>'),
+      localElements(cell, 'p').map(paragraphText).filter(Boolean).join('\n'),
     ),
   );
-  return rows.length ? markdownTable(rows) : '';
+  if (!rows.length) return '';
+  if (!complex) return markdownTable(rows);
+
+  const html = ['<table>'];
+  rowElements.forEach((row, rowIndex) => {
+    html.push('  <tr>');
+    localElements(row, 'tc').forEach((cell) => {
+      if (['1', 'true'].includes(attrLocal(cell, 'hMerge') ?? '') || ['1', 'true'].includes(attrLocal(cell, 'vMerge') ?? '')) return;
+      const colspan = Math.max(1, Number(attrLocal(cell, 'gridSpan') ?? 1));
+      const rowspan = Math.max(1, Number(attrLocal(cell, 'rowSpan') ?? 1));
+      const attributes = `${rowspan > 1 ? ` rowspan="${rowspan}"` : ''}${colspan > 1 ? ` colspan="${colspan}"` : ''}`;
+      const tag = rowIndex === 0 ? 'th' : 'td';
+      const value = localElements(cell, 'p').map(paragraphText).filter(Boolean).join('\n')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br>');
+      html.push(`    <${tag}${attributes}>${value}</${tag}>`);
+    });
+    html.push('  </tr>');
+  });
+  html.push('</table>');
+  return html.join('\n');
 }
 
 function slideTitle(document: XMLDocument): string {

@@ -32,6 +32,12 @@ async function minimalPptx(): Promise<ArrayBuffer> {
   return zip.generateAsync({ type: 'arraybuffer' });
 }
 
+async function minimalPptxMath(): Promise<ArrayBuffer> {
+  const zip = new JSZip();
+  zip.file('ppt/slides/slide1.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>Equation order</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:txBody><a:p><a:r><a:t>Before </a:t></a:r><m:oMath><m:sSup><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup></m:oMath><a:r><a:t> after</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`);
+  return zip.generateAsync({ type: 'arraybuffer' });
+}
+
 describe('Structured format converters', () => {
   it('recovers DOCX text, tables, and native Office Math as LaTeX', async () => {
     const buffer = await minimalDocx();
@@ -53,6 +59,13 @@ describe('Structured format converters', () => {
     expect(result.pageCount).toBe(1);
   });
 
+  it('keeps PowerPoint equations in their source run order without duplicated math text', async () => {
+    const buffer = await minimalPptxMath();
+    const result = await convertPptx(new File([buffer], 'math.pptx'), buffer, context);
+    expect(result.markdown).toContain('Before ${x}^{2}$ after');
+    expect(result.markdown.match(/x\}\^\{2\}/g)).toHaveLength(1);
+  });
+
   it('preserves spreadsheet values and formula source', async () => {
     const workbook = XLSX.utils.book_new();
     const sheet = XLSX.utils.aoa_to_sheet([['Method', 'Value'], ['Adaptive', 2]]);
@@ -65,10 +78,36 @@ describe('Structured format converters', () => {
     expect(result.markdown).toContain('formula: =1+1');
   });
 
+  it('uses semantic HTML spans for merged workbook cells', async () => {
+    const workbook = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet([['Grouped', ''], ['A', 'B']]);
+    sheet['!merges'] = [XLSX.utils.decode_range('A1:B1')];
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Merged');
+    const buffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const result = await convertSpreadsheet(new File([buffer], 'merged.xlsx'), buffer, context);
+    expect(result.markdown).toContain('<th colspan="2">Grouped</th>');
+  });
+
   it('parses quoted CSV deterministically', () => {
     const text = 'name,note\nA,"x, y"\n';
     const buffer = new TextEncoder().encode(text).buffer;
     const result = convertTextLike(new File([buffer], 'data.csv'), buffer, DEFAULT_OPTIONS);
     expect(result.markdown).toContain('| A | x, y |');
+  });
+
+  it('canonicalises LaTeX display math and tabular data into renderable Markdown', () => {
+    const text = String.raw`\begin{document}
+\begin{equation}E = mc^2\end{equation}
+\begin{tabular}{lr}
+Method & Rate \\
+Base & 12 \\
+Fast & 9 \\
+\end{tabular}
+\end{document}`;
+    const buffer = new TextEncoder().encode(text).buffer;
+    const result = convertTextLike(new File([buffer], 'paper.tex'), buffer, DEFAULT_OPTIONS);
+    expect(result.markdown).toContain('$$\nE = mc^2\n$$');
+    expect(result.markdown).toContain('| Method | Rate |');
+    expect(result.markdown).toContain('| Fast | 9 |');
   });
 });

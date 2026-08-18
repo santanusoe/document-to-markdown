@@ -55,6 +55,8 @@ function structuredPdf(): ArrayBuffer {
     'BT /F1 11 Tf 72 571 Td (Accelerated) Tj ET',
     'BT /F1 11 Tf 245 571 Td (1/N^2) Tj ET',
     'BT /F1 11 Tf 390 571 Td (1) Tj ET',
+    'BT /F1 12 Tf 72 525 Td (E=mc) Tj ET',
+    'BT /F1 8 Tf 104 530 Td (2) Tj ET',
   ].join('\n'));
 }
 
@@ -96,6 +98,7 @@ describe('PDF converter', () => {
     expect(result.markdown).toContain('The final sentence remains aligned.');
     expect(result.markdown).toContain('| Method | Rate | Calls |');
     expect(result.markdown).toContain('| Accelerated | 1/N^2 | 1 |');
+    expect(result.markdown).toContain('E=mc^{2}');
     expect(result.metrics.find((metric) => metric.label === 'Tables')?.value).toBe('1 detected');
     expect(result.metrics.find((metric) => metric.label === 'Layout')?.value).toContain('heading');
   });

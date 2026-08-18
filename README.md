@@ -2,7 +2,7 @@
 
 FidelityMD is a privacy-first, browser-only document-to-Markdown converter. It reads files locally and creates a Markdown file plus linked assets without sending document bytes to a server or requiring an API key. A private conversion history is stored only in the visitor's browser profile.
 
-Production URL: configured separately from the source repository. The Vite build is host-agnostic and can be deployed to a custom-domain GitHub Pages site or another static host.
+Production URL: https://santanusoe.github.io/document-to-markdown/
 
 ## Why this converter is deliberately honest
 
@@ -33,12 +33,20 @@ Legacy `.doc` and `.ppt` binaries are rejected rather than guessed. Save them as
 - Complex merged tables remain semantic HTML inside Markdown when GFM pipe tables would lose spans.
 - PDF text is reconstructed from font signals and glyph coordinates, with duplicate-layer removal, corrected line-wrap repair, repeated-margin removal, semantic heading/caption recovery, and multi-column reading-order analysis.
 - PDF tables use aligned column anchors rather than cell-count guesses, while equation candidates are mapped to LaTeX and explicitly flagged for verification.
+- PDF superscripts and subscripts are recovered from relative font geometry before Unicode mathematics is normalised into GitHub/KaTeX-compatible LaTeX.
 - OCR retains word bounding boxes and confidence instead of flattening a scanned page into an unstructured text block.
-- Pages containing inferred tables, equations, graphs, diagrams, or dense vector art are retained as high-resolution linked PNG evidence layers.
+- Meaningful embedded PDF images are cropped into individual figure assets. Caption-led vector graphs receive a conservative region crop, and the complete page remains a high-resolution evidence layer so plotted content is not silently clipped.
 - Spreadsheet formulas remain in HTML comments beside their displayed values.
 - Cached Office chart series are exported as Markdown tables.
 - OCR uses Tesseract.js inside the browser. The recognition model may be downloaded, but the document itself is not uploaded.
 - Markdown previews are sanitised before rendering.
+- TeX regions are protected before the Markdown parser runs, preventing backslashes, underscores, and alignment markers from being rewritten before KaTeX rendering.
+
+The primary download is a ZIP whenever a conversion has figures. Keep the generated Markdown file beside its `assets/` directory; otherwise relative image links cannot render. A `README.txt` inside each package repeats this rule.
+
+## Regression benchmark
+
+The automated rendering benchmark currently covers 40 representative Unicode/LaTeX expressions, eight GFM table shapes, and four PDF image-coordinate records, in addition to end-to-end DOCX, PPTX, spreadsheet, PDF, preview, and packaging tests. These defined cases must all pass. This is a reproducible regression target, not a fabricated universal percentage for arbitrary documents.
 
 ## Local development
 

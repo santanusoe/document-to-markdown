@@ -3,11 +3,12 @@ import * as pdfjs from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { Asset, ConverterContext, Metric } from '../types';
 import { canvasToBlob, safeAssetName, stemOf, uniqueAssetName } from '../utils/files';
+import { imageRegionsFromCoordinates, type NormalizedRegion } from '../utils/figures';
 import {
+  displayMath,
   looksMathematical,
   markdownTable,
   normalizeMarkdown,
-  unicodeMathToLatex,
 } from '../utils/markdown';
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -32,6 +33,7 @@ interface TextPiece {
 
 interface PdfLine {
   text: string;
+  mathText: string;
   cells: string[];
   cellXs: number[];
   x: number;
@@ -54,10 +56,19 @@ interface PageModel {
   ocrConfidence?: number;
   multiColumn: boolean;
   visualAsset?: string;
+  figures: PreservedFigure[];
   tableCount: number;
   equationCount: number;
   linkCount: number;
 }
+
+interface PreservedFigure {
+  name: string;
+  caption: string;
+  kind: 'embedded' | 'caption-region';
+}
+
+const CAPTION_PATTERN = /^(?:figure|fig\.?)\s*(?:[A-Z]?\d+|[IVXLCDM]+)(?:[.:\s—–-]|$)/i;
 
 interface PdfConversion {
   markdown: string;
@@ -152,14 +163,18 @@ function groupRows(pieces: TextPiece[]): TextPiece[][] {
   const rows: TextPiece[][] = [];
   const ordered = [...pieces].sort((left, right) => right.y - left.y || left.x - right.x);
   for (const piece of ordered) {
-    const tolerance = Math.max(2.25, piece.height * 0.28);
-    const row = rows.find((candidate) => Math.abs((candidate[0]?.y ?? 0) - piece.y) <= tolerance);
+    const row = rows.find((candidate) => {
+      const candidateHeight = median(candidate.map((item) => item.height)) || piece.height;
+      const baseline = median(candidate.map((item) => item.y));
+      const tolerance = Math.max(2.25, Math.max(piece.height, candidateHeight) * 0.55);
+      return Math.abs(baseline - piece.y) <= tolerance;
+    });
     if (row) row.push(piece);
     else rows.push([piece]);
   }
   return rows
     .map((row) => row.sort((left, right) => left.x - right.x))
-    .sort((left, right) => (right[0]?.y ?? 0) - (left[0]?.y ?? 0));
+    .sort((left, right) => median(right.map((piece) => piece.y)) - median(left.map((piece) => piece.y)));
 }
 
 function orderRowsForColumns(rows: TextPiece[][], pageWidth: number): { rows: TextPiece[][]; multiColumn: boolean } {
@@ -244,15 +259,56 @@ function pieceSequenceText(group: TextPiece[], typicalCharacterWidth: number): s
   return text.replace(/\s+([,.;:!?%])/g, '$1').trim();
 }
 
+function pieceSequenceMath(group: TextPiece[], typicalCharacterWidth: number): string {
+  if (!group.length) return '';
+  const orderedHeights = group.map((piece) => piece.height).sort((left, right) => right - left);
+  const baseHeight = median(orderedHeights.slice(0, Math.max(1, Math.ceil(orderedHeights.length * 0.6)))) || 10;
+  const basePieces = group.filter((piece) => piece.height >= baseHeight * 0.82);
+  const baseline = median((basePieces.length ? basePieces : group).map((piece) => piece.y));
+  let text = '';
+  let openScript: '^' | '_' | undefined;
+  const closeScript = (): void => {
+    if (!openScript) return;
+    text += '}';
+    openScript = undefined;
+  };
+  for (let index = 0; index < group.length; index += 1) {
+    const piece = group[index];
+    if (!piece) continue;
+    const previous = group[index - 1];
+    const gap = previous ? piece.x - (previous.x + previous.width) : 0;
+    const raised = piece.y - baseline > Math.max(1.4, baseHeight * 0.17) && piece.text.length <= 12;
+    const lowered = baseline - piece.y > Math.max(1.4, baseHeight * 0.17) && piece.text.length <= 12;
+    const script: '^' | '_' | undefined = raised ? '^' : lowered ? '_' : undefined;
+    if (script) {
+      if (openScript !== script || gap > Math.max(2, typicalCharacterWidth * 1.25)) {
+        closeScript();
+        text += `${script}{`;
+        openScript = script;
+      }
+      text += piece.text;
+      continue;
+    }
+    closeScript();
+    const punctuation = /^[,.;:!?%)\]}]/.test(piece.text);
+    const previousOpens = /[(\[{/]$/.test(previous?.text ?? '');
+    if (previous && !punctuation && !previousOpens && gap > Math.max(1.1, typicalCharacterWidth * 0.34)) text += ' ';
+    text += piece.text;
+  }
+  closeScript();
+  return text.replace(/\s+([,.;:!?%])/g, '$1').trim();
+}
+
 function joinPieces(row: TextPiece[]): {
   text: string;
+  mathText: string;
   cells: string[];
   cellXs: number[];
   boldRatio: number;
   italicRatio: number;
   hasEol: boolean;
 } {
-  if (!row.length) return { text: '', cells: [], cellXs: [], boldRatio: 0, italicRatio: 0, hasEol: false };
+  if (!row.length) return { text: '', mathText: '', cells: [], cellXs: [], boldRatio: 0, italicRatio: 0, hasEol: false };
   const typicalHeight = median(row.map((piece) => piece.height)) || 10;
   const typicalCharacterWidth = median(row.map((piece) => piece.width / Math.max(1, Array.from(piece.text).length)).filter(Boolean)) || typicalHeight * 0.45;
   const cellGroups: TextPiece[][] = [[]];
@@ -271,6 +327,7 @@ function joinPieces(row: TextPiece[]): {
   const italicCharacters = row.reduce((sum, piece) => sum + (piece.italic ? Math.max(1, piece.text.length) : 0), 0);
   return {
     text: pieceSequenceText(row, typicalCharacterWidth),
+    mathText: pieceSequenceMath(row, typicalCharacterWidth),
     cells,
     cellXs,
     boldRatio: boldCharacters / characterCount,
@@ -289,6 +346,7 @@ function linesFromPieces(pieces: TextPiece[], pageWidth: number): { lines: PdfLi
     const next = ordered.rows[index + 1];
     return {
       text: joined.text,
+      mathText: joined.mathText,
       cells: joined.cells,
       cellXs: joined.cellXs,
       x: first?.x ?? 0,
@@ -333,6 +391,34 @@ function stableTableRun(lines: PdfLine[], index: number, pageWidth: number): Tab
   return { length, columns: columnCount };
 }
 
+function alignedTableRows(lines: PdfLine[], pageWidth: number): string[][] {
+  const tolerance = Math.max(pageWidth * 0.018, median(lines.map((line) => line.height)) * 0.9);
+  const anchors: number[] = [];
+  for (const line of lines) {
+    line.cellXs.forEach((x) => {
+      const existing = anchors.findIndex((anchor) => Math.abs(anchor - x) <= tolerance);
+      if (existing >= 0) {
+        anchors[existing] = ((anchors[existing] ?? x) + x) / 2;
+      } else {
+        anchors.push(x);
+      }
+    });
+  }
+  anchors.sort((left, right) => left - right);
+  return lines.map((line) => {
+    const row = Array.from({ length: anchors.length }, () => '');
+    line.cells.forEach((cell, index) => {
+      const x = line.cellXs[index] ?? 0;
+      let column = 0;
+      for (let anchorIndex = 1; anchorIndex < anchors.length; anchorIndex += 1) {
+        if (Math.abs((anchors[anchorIndex] ?? x) - x) < Math.abs((anchors[column] ?? x) - x)) column = anchorIndex;
+      }
+      row[column] = row[column] ? `${row[column]} ${cell}` : cell;
+    });
+    return row;
+  });
+}
+
 function dominantLineHeight(lines: PdfLine[]): number {
   const weights = new Map<number, number>();
   for (const line of lines) {
@@ -358,9 +444,16 @@ function repairedLineText(lines: PdfLine[], enabled: boolean): string[] {
   return output;
 }
 
+function mathematicalLine(line: PdfLine, text = line.text): boolean {
+  if (looksMathematical(text)) return true;
+  const inferredScript = line.mathText !== line.text && /(?:\^|_)\{[^{}]+}/.test(line.mathText);
+  const proseWords = text.match(/[A-Za-z]{3,}/g)?.length ?? 0;
+  return inferredScript && text.length <= 42 && proseWords <= 1;
+}
+
 function headingLevel(line: PdfLine, bodyHeight: number): number | undefined {
   const text = line.text.trim();
-  if (text.length < 2 || text.length > 150 || /[.!?;:]$/.test(text) || looksMathematical(text)) return undefined;
+  if (text.length < 2 || text.length > 150 || /[.!?;:]$/.test(text) || mathematicalLine(line, text)) return undefined;
   if (/^(?:figure|fig\.?|table|algorithm|equation)\s*\d+/i.test(text)) return undefined;
   const ratio = line.height / Math.max(bodyHeight, 1);
   const letters = text.match(/[A-Za-z]/g) ?? [];
@@ -401,7 +494,7 @@ function pageLinesToMarkdown(page: PageModel, ignored: Set<string>, dehyphenate:
     const table = stableTableRun(page.lines, index, page.width);
     if (table) {
       flush();
-      const rows = page.lines.slice(index, index + table.length).map((tableLine) => tableLine.cells);
+      const rows = alignedTableRows(page.lines.slice(index, index + table.length), page.width);
       parts.push(markdownTable(rows));
       index += table.length - 1;
       continue;
@@ -414,18 +507,18 @@ function pageLinesToMarkdown(page: PageModel, ignored: Set<string>, dehyphenate:
       headingCount += 1;
       continue;
     }
-    if (looksMathematical(text)) {
+    if (mathematicalLine(line, text)) {
       flush();
-      const equationLines = [text];
+      const equationLines = [line.mathText || text];
       while (index + 1 < page.lines.length) {
         const nextText = lines[index + 1]?.trim() ?? '';
         const nextLine = page.lines[index + 1];
         const currentLine = page.lines[index];
-        if (!nextLine || !currentLine || !looksMathematical(nextText) || currentLine.gapAfter > bodyHeight * 2.2) break;
-        equationLines.push(nextText);
+        if (!nextLine || !currentLine || !mathematicalLine(nextLine, nextText) || currentLine.gapAfter > bodyHeight * 2.2) break;
+        equationLines.push(nextLine.mathText || nextText);
         index += 1;
       }
-      parts.push(`$$\n${equationLines.map((equation) => unicodeMathToLatex(equation.replace(/−/g, '-'))).join('\n')}\n$$`);
+      parts.push(displayMath(equationLines));
       continue;
     }
     if (/^(?:[•▪◦‣]|[-–—])\s+/.test(text)) {
@@ -471,15 +564,122 @@ function repeatedMargins(pages: PageModel[]): Set<string> {
   return new Set(Array.from(counts.entries()).filter(([, count]) => count >= threshold).map(([text]) => text));
 }
 
-async function renderPage(page: PdfPage, scale = 2.2): Promise<HTMLCanvasElement> {
+interface RenderedPage {
+  canvas: HTMLCanvasElement;
+  imageRegions: NormalizedRegion[];
+}
+
+function clampUnit(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+async function renderPage(page: PdfPage, scale = 2.2, recordImages = false): Promise<RenderedPage> {
   const viewport = page.getViewport({ scale });
   const canvas = document.createElement('canvas');
   canvas.width = Math.ceil(viewport.width);
   canvas.height = Math.ceil(viewport.height);
   const canvasContext = canvas.getContext('2d', { alpha: false });
   if (!canvasContext) throw new Error('Canvas rendering is not supported in this browser.');
-  await page.render({ canvas, canvasContext, viewport }).promise;
-  return canvas;
+  const renderTask = page.render({ canvas, canvasContext, viewport, recordImages });
+  await renderTask.promise;
+  return {
+    canvas,
+    imageRegions: imageRegionsFromCoordinates(renderTask.imageCoordinates),
+  };
+}
+
+function regionArea(region: NormalizedRegion): number {
+  return Math.max(0, region.right - region.left) * Math.max(0, region.bottom - region.top);
+}
+
+function markdownImageAlt(value: string): string {
+  return value.replace(/[\r\n]+/g, ' ').replace(/[\[\]]/g, '').trim();
+}
+
+function captionTop(line: PdfLine, pageHeight: number): number {
+  return clampUnit(1 - (line.y + line.height) / Math.max(1, pageHeight));
+}
+
+function figureCaption(region: NormalizedRegion, lines: PdfLine[], pageHeight: number, pageNumber: number, index: number): string {
+  const candidates = lines
+    .filter((line) => CAPTION_PATTERN.test(line.text.trim()))
+    .map((line) => {
+      const top = captionTop(line, pageHeight);
+      const belowDistance = top >= region.bottom - 0.025 ? top - region.bottom : Number.POSITIVE_INFINITY;
+      const aboveDistance = top < region.top ? region.top - top : Number.POSITIVE_INFINITY;
+      return { text: line.text.trim(), distance: Math.min(belowDistance, aboveDistance + 0.05) };
+    })
+    .filter((candidate) => candidate.distance < 0.19)
+    .sort((left, right) => left.distance - right.distance);
+  return candidates[0]?.text || `Figure ${index} from PDF page ${pageNumber}`;
+}
+
+function figureRegions(regions: NormalizedRegion[]): NormalizedRegion[] {
+  return regions
+    .filter((region) => {
+      const width = region.right - region.left;
+      const height = region.bottom - region.top;
+      const area = regionArea(region);
+      return width >= 0.12 && height >= 0.065 && area >= 0.012 && area <= 0.82 && !(width > 0.82 && height < 0.1);
+    })
+    .sort((left, right) => left.top - right.top || left.left - right.left)
+    .slice(0, 12);
+}
+
+async function cropFigure(
+  canvas: HTMLCanvasElement,
+  region: NormalizedRegion,
+): Promise<Blob> {
+  const padding = Math.max(8, Math.round(Math.min(canvas.width, canvas.height) * 0.008));
+  const sourceLeft = Math.max(0, Math.floor(region.left * canvas.width) - padding);
+  const sourceTop = Math.max(0, Math.floor(region.top * canvas.height) - padding);
+  const sourceRight = Math.min(canvas.width, Math.ceil(region.right * canvas.width) + padding);
+  const sourceBottom = Math.min(canvas.height, Math.ceil(region.bottom * canvas.height) + padding);
+  const crop = document.createElement('canvas');
+  crop.width = Math.max(1, sourceRight - sourceLeft);
+  crop.height = Math.max(1, sourceBottom - sourceTop);
+  const context = crop.getContext('2d', { alpha: false });
+  if (!context) throw new Error('Canvas cropping is not supported in this browser.');
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, crop.width, crop.height);
+  context.drawImage(canvas, sourceLeft, sourceTop, crop.width, crop.height, 0, 0, crop.width, crop.height);
+  return canvasToBlob(crop);
+}
+
+async function preserveFigures(
+  canvas: HTMLCanvasElement,
+  imageRegions: NormalizedRegion[],
+  lines: PdfLine[],
+  layoutHeight: number,
+  pageNumber: number,
+  assets: Asset[],
+): Promise<PreservedFigure[]> {
+  const preserved: PreservedFigure[] = [];
+  const embedded = figureRegions(imageRegions);
+  for (let index = 0; index < embedded.length; index += 1) {
+    const region = embedded[index];
+    if (!region) continue;
+    const name = uniqueAssetName(safeAssetName(`page-${pageNumber}-figure-${index + 1}.png`), assets);
+    const caption = figureCaption(region, lines, layoutHeight, pageNumber, index + 1);
+    assets.push({ name, blob: await cropFigure(canvas, region), kind: 'image', source: `PDF page ${pageNumber} embedded figure crop` });
+    preserved.push({ name, caption, kind: 'embedded' });
+  }
+
+  const captions = lines.filter((line) => CAPTION_PATTERN.test(line.text.trim()));
+  for (const captionLine of captions) {
+    const bottom = Math.max(0.08, captionTop(captionLine, layoutHeight) - 0.008);
+    const region: NormalizedRegion = { left: 0.045, right: 0.955, top: Math.max(0.035, bottom - 0.38), bottom };
+    const alreadyCovered = embedded.some((candidate) => {
+      const overlapWidth = Math.max(0, Math.min(region.right, candidate.right) - Math.max(region.left, candidate.left));
+      const overlapHeight = Math.max(0, Math.min(region.bottom, candidate.bottom) - Math.max(region.top, candidate.top));
+      return overlapWidth * overlapHeight / Math.max(0.0001, regionArea(candidate)) > 0.55;
+    });
+    if (alreadyCovered || region.bottom - region.top < 0.1 || preserved.length >= 12) continue;
+    const name = uniqueAssetName(safeAssetName(`page-${pageNumber}-figure-${preserved.length + 1}.png`), assets);
+    assets.push({ name, blob: await cropFigure(canvas, region), kind: 'image', source: `PDF page ${pageNumber} caption-led vector figure crop` });
+    preserved.push({ name, caption: captionLine.text.trim(), kind: 'caption-region' });
+  }
+  return preserved;
 }
 
 interface OcrResult {
@@ -605,18 +805,18 @@ export async function convertPdf(
       const digitalCharacters = pieces.reduce((sum, piece) => sum + piece.text.length, 0);
       const scanned = digitalCharacters < 32;
       let linkCount = scanned ? 0 : await applyLinkAnnotations(page, pieces);
-      let canvas: HTMLCanvasElement | undefined;
+      let rendered: RenderedPage | undefined;
 
       if (scanned) {
         scannedPages += 1;
         if (context.options.runOcr) {
-          canvas = await renderPage(page, 2.6);
-          layoutWidth = canvas.width;
-          layoutHeight = canvas.height;
+          rendered = await renderPage(page, 2.6, context.options.preserveVisualPages);
+          layoutWidth = rendered.canvas.width;
+          layoutHeight = rendered.canvas.height;
           context.onProgress({ phase: `OCR page ${pageNumber}`, percent: Math.round(basePercent + 2), detail: 'Reconstructing words from local OCR geometry' });
           try {
             ocrSession ??= await createOcrSession();
-            const recognition = await ocrSession.recognize(canvas, (progress) => {
+            const recognition = await ocrSession.recognize(rendered.canvas, (progress) => {
               context.onProgress({ phase: `OCR page ${pageNumber}`, percent: Math.min(88, Math.round(basePercent + progress * 0.08)), detail: `${progress}% recognised` });
             });
             pieces = recognition.pieces;
@@ -633,7 +833,7 @@ export async function convertPdf(
       }
 
       const geometric = linesFromPieces(pieces, layoutWidth);
-      const equationCount = geometric.lines.filter((line) => looksMathematical(line.text)).length;
+      const equationCount = geometric.lines.filter((line) => mathematicalLine(line)).length;
       let tableCount = 0;
       for (let index = 0; index < geometric.lines.length; index += 1) {
         const table = stableTableRun(geometric.lines, index, layoutWidth);
@@ -646,11 +846,24 @@ export async function convertPdf(
         scanned || tableCount > 0 || equationCount > 0 || await hasVisualOperators(page)
       );
       let visualAsset: string | undefined;
+      let figures: PreservedFigure[] = [];
       if (visual) {
         visualPages += 1;
-        canvas ??= await renderPage(page);
+        rendered ??= await renderPage(page, 2.2, true);
+        try {
+          figures = await preserveFigures(
+            rendered.canvas,
+            rendered.imageRegions,
+            geometric.lines,
+            layoutHeight,
+            pageNumber,
+            assets,
+          );
+        } catch (error) {
+          warnings.push(`Individual figures on page ${pageNumber} could not be cropped: ${error instanceof Error ? error.message : String(error)}. The complete page visual was retained instead.`);
+        }
         const name = uniqueAssetName(safeAssetName(`page-${pageNumber}-visual.png`), assets);
-        assets.push({ name, blob: await canvasToBlob(canvas), kind: 'image', source: `PDF page ${pageNumber} · ${canvas.width}×${canvas.height}` });
+        assets.push({ name, blob: await canvasToBlob(rendered.canvas), kind: 'image', source: `PDF page ${pageNumber} · ${rendered.canvas.width}×${rendered.canvas.height}` });
         visualAsset = name;
       }
       pages.push({
@@ -662,6 +875,7 @@ export async function convertPdf(
         ocrConfidence,
         multiColumn: geometric.multiColumn,
         visualAsset,
+        figures,
         tableCount,
         equationCount,
         linkCount,
@@ -694,6 +908,12 @@ export async function convertPdf(
     const pageParts: string[] = [];
     if (context.options.keepPageMarkers) pageParts.push(`<!-- Page ${page.pageNumber} -->`);
     if (body.markdown) pageParts.push(body.markdown);
+    if (page.figures.length) {
+      pageParts.push([
+        `#### Preserved figures — page ${page.pageNumber}`,
+        ...page.figures.map((figure) => `![${markdownImageAlt(figure.caption)}](assets/${figure.name})\n\n*${figure.caption.replace(/\*/g, '\\*')}*`),
+      ].join('\n\n'));
+    }
     if (page.visualAsset) {
       pageParts.push(`> **Source visual — page ${page.pageNumber}.** A high-resolution PNG is retained for tables, graphs, diagrams and visually encoded mathematics that cannot be reconstructed safely from the text layer alone.\n\n![High-resolution source visual for page ${page.pageNumber}](assets/${page.visualAsset})`);
     }
@@ -702,6 +922,7 @@ export async function convertPdf(
 
   const tableCount = pages.reduce((sum, page) => sum + page.tableCount, 0);
   const equationCount = pages.reduce((sum, page) => sum + page.equationCount, 0);
+  const figureCount = pages.reduce((sum, page) => sum + page.figures.length, 0);
   const multiColumnPages = pages.filter((page) => page.multiColumn).length;
   const linkCount = pages.reduce((sum, page) => sum + page.linkCount, 0);
   const ocrConfidences = pages.flatMap((page) => page.ocrConfidence === undefined ? [] : [page.ocrConfidence]);
@@ -709,6 +930,7 @@ export async function convertPdf(
   if (scannedPages) warnings.push(`${scannedPages} scanned or image-only page${scannedPages === 1 ? ' was' : 's were'} detected. OCR text should be proofread against the preserved visual layer.`);
   if (tableCount) warnings.push(`${tableCount} PDF table${tableCount === 1 ? ' was' : 's were'} reconstructed from aligned text anchors. Merged cells and border-only meaning should be checked against the retained page image.`);
   if (equationCount) warnings.push('PDF equations do not contain a universal semantic LaTeX representation. Unicode mathematics was mapped heuristically; compare important formulae with the visual layer.');
+  if (figureCount) warnings.push(`${figureCount} PDF figure${figureCount === 1 ? ' was' : 's were'} exported as separate PNG assets. Caption-led vector crops may include nearby labels so no plotted evidence is clipped.`);
   if (multiColumnPages) warnings.push(`${multiColumnPages} multi-column page${multiColumnPages === 1 ? ' was' : 's were'} reordered geometrically. Unusual floating boxes may still need manual review.`);
 
   const metrics: Metric[] = [
@@ -726,8 +948,8 @@ export async function convertPdf(
       detail: equationCount ? 'Unicode symbols are translated to LaTeX, while page snapshots preserve the authoritative appearance.' : 'No math-dense lines were detected.',
     },
     {
-      label: 'Visuals', value: visualPages ? `${visualPages} pages preserved` : 'No visual layer', level: visualPages ? 'high' : 'medium',
-      detail: visualPages ? 'Relevant pages are rendered at high resolution and exported losslessly as linked PNG assets.' : 'No raster images, inferred tables, equations or dense vector drawings required a visual page.',
+      label: 'Visuals', value: visualPages ? `${figureCount} figures · ${visualPages} pages` : 'No visual layer', level: visualPages ? 'high' : 'medium',
+      detail: visualPages ? 'Meaningful embedded images and caption-led vector figures are cropped separately; complete high-resolution pages remain as lossless fallback evidence.' : 'No raster images, inferred tables, equations or dense vector drawings required a visual page.',
     },
     {
       label: 'Layout', value: multiColumnPages ? `${multiColumnPages} multi-column` : `${headingCount} headings`, level: multiColumnPages ? 'medium' : 'high',

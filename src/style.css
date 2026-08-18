@@ -218,9 +218,13 @@ main { overflow: hidden; position: relative; }
 .markdown-preview p { margin: 1em 0; }
 .markdown-preview a { color: var(--accent); }
 .markdown-preview img { max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }
-.markdown-preview table { border-collapse: collapse; width: 100%; display: block; overflow-x: auto; margin: 1.4em 0; }
-.markdown-preview th, .markdown-preview td { border: 1px solid var(--line); padding: 7px 9px; text-align: left; white-space: nowrap; }
+.markdown-preview table { border-collapse: collapse; width: max-content; min-width: 100%; max-width: 100%; display: block; overflow-x: auto; margin: 1.4em 0; }
+.markdown-preview th, .markdown-preview td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; white-space: normal; min-width: 84px; overflow-wrap: anywhere; }
 .markdown-preview th { background: var(--panel-soft); }
+.markdown-preview td > :first-child, .markdown-preview th > :first-child { margin-top: 0; }
+.markdown-preview td > :last-child, .markdown-preview th > :last-child { margin-bottom: 0; }
+.markdown-preview .katex-display { overflow-x: auto; overflow-y: hidden; padding: .35em 0; }
+.markdown-preview .katex { font-size: 1.06em; }
 .markdown-preview blockquote { border-left: 3px solid var(--accent); margin: 1.4em 0; padding: 4px 16px; color: var(--muted); }
 .markdown-preview pre { background: var(--panel-soft); padding: 15px; border-radius: 8px; overflow: auto; }
 .markdown-preview code { font-family: 'DM Mono', monospace; font-size: .87em; }

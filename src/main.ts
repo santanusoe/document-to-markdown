@@ -9,8 +9,8 @@ import '@fontsource/dm-mono/latin-400.css';
 import '@fontsource/dm-mono/latin-500.css';
 import '@fontsource/playfair-display/latin-600-italic.css';
 import DOMPurify from 'dompurify';
+import katex from 'katex';
 import { marked } from 'marked';
-import renderMathInElement from 'katex/contrib/auto-render';
 import { ACCEPTED_EXTENSIONS, convertFile } from './converter';
 import { clearHistory, deleteHistory, loadHistory, saveHistory, type HistoryEntry } from './history';
 import { DEFAULT_OPTIONS, type ConversionOptions, type ConversionProgress, type ConversionResult } from './types';
@@ -107,7 +107,7 @@ app.innerHTML = `
           <span class="local-pill">On device</span>
         </div>
         <label class="setting-row">
-          <span><strong>Preserve visual pages</strong><small>Keep graph- and diagram-heavy PDF pages as linked PNGs.</small></span>
+          <span><strong>Preserve figures + visual pages</strong><small>Crop meaningful figures and keep the complete page as a lossless fallback.</small></span>
           <input type="checkbox" data-option="preserveVisualPages" checked /><i></i>
         </label>
         <label class="setting-row">
@@ -170,7 +170,7 @@ app.innerHTML = `
         <article><span class="method-icon">¶</span><h3>Digital documents</h3><p>DOCX, PPTX, ODT and EPUB are read from their semantic XML—not flattened into screenshots.</p><small>Headings · lists · links · footnotes · media</small></article>
         <article><span class="method-icon">▦</span><h3>Tables and workbooks</h3><p>Native cells, formulae, merges and cached chart series are reconstructed deterministically.</p><small>GFM tables · HTML spans · formula comments</small></article>
         <article><span class="method-icon">∑</span><h3>Mathematics</h3><p>Office Math becomes LaTeX structurally. PDF formulae are flagged for review and paired with the source visual.</p><small>OMML → LaTeX · MathML retained</small></article>
-        <article><span class="method-icon">◫</span><h3>Scans and figures</h3><p>OCR runs locally, while graphs and diagrams remain linked to authoritative visual assets.</p><small>Local OCR · page visual layer · no uploads</small></article>
+        <article><span class="method-icon">◫</span><h3>Scans and figures</h3><p>OCR runs locally. Raster figures and caption-led vector graphs are exported beside a complete page fallback.</p><small>Figure crops · local OCR · visual evidence</small></article>
       </div>
     </section>
   </main>
@@ -244,7 +244,7 @@ function renderHistory(): void {
         <span class="history-meta"><small>${escapeHtml(entry.sourceType)} · ${formatHistoryDate(entry.createdAt)}</small><strong title="${escapeHtml(entry.sourceName)}">${escapeHtml(entry.sourceName)}</strong><i>${pageText}${entry.wordCount.toLocaleString()} words · ${(entry.elapsedMs / 1000).toFixed(1)} s</i></span>
       </button>
       <div class="history-signals" aria-label="Conversion signals"><span>${nativeCount} native signals</span><span class="${reviewCount ? 'needs-review' : ''}">${reviewCount ? `${reviewCount} review notes` : 'No review flags'}</span>${entry.assetsStored && entry.assets.length ? `<span>${entry.assets.length} assets saved</span>` : ''}</div>
-      <div class="history-actions"><button type="button" data-history-download="${entry.id}">Download .md</button><button type="button" data-history-delete="${entry.id}" aria-label="Delete ${escapeHtml(entry.sourceName)} from history">Delete</button></div>
+      <div class="history-actions"><button type="button" data-history-download="${entry.id}">${entry.assets.length ? 'Download complete ZIP' : 'Download .md'}</button><button type="button" data-history-delete="${entry.id}" aria-label="Delete ${escapeHtml(entry.sourceName)} from history">Delete</button></div>
     </article>`;
   }).join('');
 
@@ -264,9 +264,15 @@ function renderHistory(): void {
     renderOutput();
     resultsShell.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }));
-  historyList.querySelectorAll<HTMLButtonElement>('[data-history-download]').forEach((button) => button.addEventListener('click', () => {
+  historyList.querySelectorAll<HTMLButtonElement>('[data-history-download]').forEach((button) => button.addEventListener('click', async () => {
     const entry = state.history.find((candidate) => candidate.id === button.dataset.historyDownload);
-    if (entry) downloadBlob(new Blob([entry.markdown], { type: 'text/markdown;charset=utf-8' }), `${stemOf(entry.sourceName)}.md`);
+    if (!entry) return;
+    if (entry.assets.length) {
+      showToast('Building complete package with figures…');
+      downloadBlob(await packageResult(entry), `${stemOf(entry.sourceName)}-markdown.zip`);
+    } else {
+      downloadBlob(new Blob([entry.markdown], { type: 'text/markdown;charset=utf-8' }), `${stemOf(entry.sourceName)}.md`);
+    }
   }));
   historyList.querySelectorAll<HTMLButtonElement>('[data-history-delete]').forEach((button) => button.addEventListener('click', async () => {
     const id = button.dataset.historyDelete;
@@ -342,12 +348,44 @@ function fidelityBadge(level: string): string {
   return level === 'high' ? 'Native/high' : level === 'medium' ? 'Inferred' : 'Review';
 }
 
+function protectMathForPreview(markdown: string): { markdown: string; tokens: Array<{ token: string; source: string }> } {
+  const tokens: Array<{ token: string; source: string }> = [];
+  const protect = (segment: string): string => segment.replace(
+    /(?<!\\)\$\$[\s\S]+?(?<!\\)\$\$|\\\[[\s\S]+?\\\]|(?<!\\)\$(?!\$)(?:\\.|[^$\n])+?(?<!\\)\$|\\\((?:\\.|[^\n])+?\\\)/g,
+    (source) => {
+      const token = `FIDELITYMATHTOKEN${tokens.length}END`;
+      tokens.push({ token, source });
+      return token;
+    },
+  );
+  const fenced = /((?:`{3,}|~{3,})[^\n]*\n[\s\S]*?\n(?:`{3,}|~{3,}))/g;
+  return {
+    markdown: markdown.split(fenced).map((segment, index) => index % 2 ? segment : protect(segment)).join(''),
+    tokens,
+  };
+}
+
 function renderMarkdownPreview(result: ConversionResult): void {
   const preview = output.querySelector<HTMLElement>('[data-preview]');
   if (!preview) return;
   revokePreviewUrls();
-  const raw = marked.parse(result.markdown, { gfm: true, breaks: false }) as string;
-  preview.innerHTML = DOMPurify.sanitize(raw, { ADD_TAGS: ['math', 'mrow', 'mi', 'mo', 'mn', 'msup', 'msub', 'mfrac'], ADD_ATTR: ['display', 'rowspan', 'colspan'] });
+  const protectedMath = protectMathForPreview(result.markdown);
+  let raw = marked.parse(protectedMath.markdown, { gfm: true, breaks: false }) as string;
+  protectedMath.tokens.forEach((token, index) => {
+    raw = raw.replaceAll(token.token, `<span data-fidelity-math="${index}"></span>`);
+  });
+  preview.innerHTML = DOMPurify.sanitize(raw, { ADD_TAGS: ['math', 'mrow', 'mi', 'mo', 'mn', 'msup', 'msub', 'mfrac'], ADD_ATTR: ['display', 'rowspan', 'colspan', 'data-fidelity-math'] });
+  preview.querySelectorAll<HTMLElement>('[data-fidelity-math]').forEach((element) => {
+    const index = Number(element.dataset.fidelityMath);
+    const source = protectedMath.tokens[index]?.source ?? '';
+    const display = source.startsWith('$$') || source.startsWith('\\[');
+    const latex = source.startsWith('$$')
+      ? source.slice(2, -2)
+      : source.startsWith('$')
+        ? source.slice(1, -1)
+        : source.slice(2, -2);
+    katex.render(latex.trim(), element, { displayMode: display, throwOnError: false, strict: false });
+  });
   preview.querySelectorAll<HTMLImageElement>('img[src^="assets/"]').forEach((image) => {
     const name = image.getAttribute('src')?.replace(/^assets\//, '');
     const asset = result.assets.find((candidate) => candidate.name === name);
@@ -356,20 +394,6 @@ function renderMarkdownPreview(result: ConversionResult): void {
     state.previewUrls.push(url);
     image.src = url;
   });
-  try {
-    renderMathInElement(preview, {
-      delimiters: [
-        { left: '$$', right: '$$', display: true },
-        { left: '\\[', right: '\\]', display: true },
-        { left: '$', right: '$', display: false },
-        { left: '\\(', right: '\\)', display: false },
-      ],
-      throwOnError: false,
-      strict: false,
-    });
-  } catch {
-    // The source remains visible when a malformed equation cannot be rendered.
-  }
 }
 
 function renderOutput(): void {
@@ -397,7 +421,7 @@ function renderOutput(): void {
   output.innerHTML = `
     <div class="output-header">
       <div><span class="success-kicker">✓ Conversion complete</span><h3>${escapeHtml(result.sourceName)}</h3><p>${result.sourceType} · ${result.wordCount.toLocaleString()} words · ${result.assets.length} assets · ${(result.elapsedMs / 1000).toFixed(1)} s</p></div>
-      <div class="output-actions"><button class="secondary-button" type="button" data-copy>Copy</button><button class="secondary-button" type="button" data-download-md>Download .md</button><button class="primary-button compact" type="button" data-download>Package + assets</button></div>
+      <div class="output-actions"><button class="secondary-button" type="button" data-copy>Copy source</button>${result.assets.length ? '<button class="secondary-button" type="button" data-download-md title="Markdown only; linked figures require the assets folder">Markdown only</button><button class="primary-button compact" type="button" data-download>Download complete ZIP</button>' : '<button class="primary-button compact" type="button" data-download-md>Download .md</button>'}</div>
     </div>
     <section class="fidelity-report" aria-labelledby="report-${result.id}">
       <div class="report-title"><div><span class="step-number">F</span><div><h4 id="report-${result.id}">Fidelity report</h4><p>Evidence behind this conversion</p></div></div><span class="report-policy">No universal “99%” claim</span></div>
@@ -427,7 +451,7 @@ function renderOutput(): void {
     downloadBlob(new Blob([result.markdown], { type: 'text/markdown;charset=utf-8' }), `${stemOf(result.sourceName)}.md`);
   });
   output.querySelector('[data-download]')?.addEventListener('click', async () => {
-    showToast('Building download package…');
+    showToast('Building complete package with figures…');
     downloadBlob(await packageResult(result), `${stemOf(result.sourceName)}-markdown.zip`);
   });
 }

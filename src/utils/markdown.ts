@@ -8,59 +8,175 @@ const UNICODE_LATEX: Record<string, string> = {
   'σ': '\\sigma', 'τ': '\\tau', 'φ': '\\varphi', 'ϕ': '\\phi', 'χ': '\\chi', 'ψ': '\\psi',
   'ω': '\\omega', 'Γ': '\\Gamma', 'Δ': '\\Delta', 'Θ': '\\Theta', 'Λ': '\\Lambda',
   'Ξ': '\\Xi', 'Π': '\\Pi', 'Σ': '\\Sigma', 'Φ': '\\Phi', 'Ψ': '\\Psi', 'Ω': '\\Omega',
-  '∑': '\\sum', '∏': '\\prod', '∫': '\\int', '√': '\\sqrt{}', '∞': '\\infty',
+  '∑': '\\sum', '∏': '\\prod', '∫': '\\int', '∬': '\\iint', '∭': '\\iiint',
+  '∮': '\\oint', '√': '\\sqrt{}', '∞': '\\infty',
   '∂': '\\partial', '∇': '\\nabla', '≤': '\\leq', '≥': '\\geq', '≠': '\\neq',
-  '≈': '\\approx', '≃': '\\simeq', '≡': '\\equiv', '∈': '\\in', '∉': '\\notin',
+  '≈': '\\approx', '≃': '\\simeq', '≅': '\\cong', '≡': '\\equiv', '∼': '\\sim',
+  '≪': '\\ll', '≫': '\\gg', '∝': '\\propto', '∈': '\\in', '∉': '\\notin',
   '⊂': '\\subset', '⊆': '\\subseteq', '⊃': '\\supset', '⊇': '\\supseteq',
   '∪': '\\cup', '∩': '\\cap', '∅': '\\varnothing', '∀': '\\forall', '∃': '\\exists',
   '¬': '\\neg', '∧': '\\land', '∨': '\\lor', '⇒': '\\Rightarrow', '⇔': '\\Leftrightarrow',
-  '→': '\\to', '↦': '\\mapsto', '←': '\\leftarrow', '±': '\\pm', '·': '\\cdot',
-  '×': '\\times', '÷': '\\div', '∘': '\\circ', '⊥': '\\perp', '∥': '\\Vert',
-  '‖': '\\Vert', 'ℝ': '\\mathbb{R}', 'ℕ': '\\mathbb{N}', 'ℤ': '\\mathbb{Z}',
+  '→': '\\to', '↦': '\\mapsto', '←': '\\leftarrow', '↔': '\\leftrightarrow',
+  '↑': '\\uparrow', '↓': '\\downarrow', '±': '\\pm', '∓': '\\mp', '·': '\\cdot',
+  '×': '\\times', '÷': '\\div', '∘': '\\circ', '⊕': '\\oplus', '⊗': '\\otimes',
+  '⊙': '\\odot', '⊥': '\\perp', '∥': '\\parallel', '‖': '\\Vert', '∠': '\\angle',
+  '∴': '\\therefore', '∵': '\\because', 'ℝ': '\\mathbb{R}', 'ℕ': '\\mathbb{N}', 'ℤ': '\\mathbb{Z}',
   'ℚ': '\\mathbb{Q}', 'ℂ': '\\mathbb{C}', 'ℋ': '\\mathcal{H}', '…': '\\ldots',
+  'ℓ': '\\ell', 'ℏ': '\\hbar', 'ℜ': '\\Re', 'ℑ': '\\Im',
+  '½': '\\frac{1}{2}', '⅓': '\\frac{1}{3}', '⅔': '\\frac{2}{3}',
+  '¼': '\\frac{1}{4}', '¾': '\\frac{3}{4}', '⅕': '\\frac{1}{5}',
+  '⅖': '\\frac{2}{5}', '⅗': '\\frac{3}{5}', '⅘': '\\frac{4}{5}',
+  '⅙': '\\frac{1}{6}', '⅚': '\\frac{5}{6}', '⅛': '\\frac{1}{8}',
+  '⅜': '\\frac{3}{8}', '⅝': '\\frac{5}{8}', '⅞': '\\frac{7}{8}',
+  '−': '-',
 };
+
+const SUPERSCRIPTS: Record<string, string> = {
+  '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6',
+  '⁷': '7', '⁸': '8', '⁹': '9', '⁺': '+', '⁻': '-', '⁼': '=', '⁽': '(',
+  '⁾': ')', 'ⁿ': 'n', 'ⁱ': 'i',
+};
+
+const SUBSCRIPTS: Record<string, string> = {
+  '₀': '0', '₁': '1', '₂': '2', '₃': '3', '₄': '4', '₅': '5', '₆': '6',
+  '₇': '7', '₈': '8', '₉': '9', '₊': '+', '₋': '-', '₌': '=', '₍': '(',
+  '₎': ')', 'ₐ': 'a', 'ₑ': 'e', 'ₕ': 'h', 'ᵢ': 'i', 'ⱼ': 'j', 'ₖ': 'k',
+  'ₗ': 'l', 'ₘ': 'm', 'ₙ': 'n', 'ₒ': 'o', 'ₚ': 'p', 'ᵣ': 'r', 'ₛ': 's',
+  'ₜ': 't', 'ₓ': 'x',
+};
+
+function mappedScript(
+  characters: string[],
+  start: number,
+  mapping: Record<string, string>,
+): { latex: string; end: number } {
+  let value = '';
+  let end = start;
+  while (end < characters.length && mapping[characters[end] ?? ''] !== undefined) {
+    value += mapping[characters[end] ?? ''];
+    end += 1;
+  }
+  return { latex: value, end };
+}
 
 export function unicodeMathToLatex(input: string): string {
   let output = '';
-  for (const symbol of input) output += UNICODE_LATEX[symbol] ?? symbol;
+  const characters = Array.from(input.normalize('NFC'));
+  for (let index = 0; index < characters.length; index += 1) {
+    const symbol = characters[index] ?? '';
+    if (SUPERSCRIPTS[symbol] !== undefined) {
+      const script = mappedScript(characters, index, SUPERSCRIPTS);
+      output += `^{${script.latex}}`;
+      index = script.end - 1;
+      continue;
+    }
+    if (SUBSCRIPTS[symbol] !== undefined) {
+      const script = mappedScript(characters, index, SUBSCRIPTS);
+      output += `_{${script.latex}}`;
+      index = script.end - 1;
+      continue;
+    }
+    const replacement = UNICODE_LATEX[symbol] ?? symbol;
+    output += replacement;
+    const next = characters[index + 1] ?? '';
+    // TeX command names consume following letters. A source such as αx must
+    // become "\\alpha x", not the undefined command "\\alphax".
+    if (/^\\[A-Za-z]+$/.test(replacement) && /^[A-Za-z]$/.test(next)) output += ' ';
+  }
   return output
-    .replace(/([A-Za-z0-9})\]])([₀₁₂₃₄₅₆₇₈₉]+)/g, (_match, base: string, sub: string) =>
-      `${base}_{${sub.replace(/[₀₁₂₃₄₅₆₇₈₉]/g, (digit) => String('₀₁₂₃₄₅₆₇₈₉'.indexOf(digit)))}}`,
-    )
-    .replace(/([A-Za-z0-9})\]])([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g, (_match, base: string, sup: string) =>
-      `${base}^{${sup.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]/g, (digit) => String('⁰¹²³⁴⁵⁶⁷⁸⁹'.indexOf(digit)))}}`,
-    )
-    .replace(/\\sqrt\{\}\s*([^\s+\-=]+)/g, '\\sqrt{$1}')
+    .replace(/\\sqrt\{\}\s*\(([^()]*)\)/g, '\\sqrt{$1}')
+    .replace(/\\sqrt\{\}\s*((?:\\[A-Za-z]+(?:\{[^{}]*})?|[A-Za-z0-9])(?:_\{[^{}]*}|\^\{[^{}]*})*)/g, '\\sqrt{$1}')
+    .replace(/[\u2000-\u200A\u202F]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+export function inlineMath(input: string): string {
+  return `$${unicodeMathToLatex(input).replace(/(?<!\\)\$/g, '\\$')}$`;
+}
+
+export function displayMath(input: string | string[]): string {
+  const lines = Array.isArray(input) ? input : [input];
+  const converted = lines.map((line) => unicodeMathToLatex(line)).filter(Boolean);
+  const body = converted.length > 1
+    ? `\\begin{aligned}\n${converted.join(' \\\\ \n')}\n\\end{aligned}`
+    : converted[0] ?? '';
+  return `$$\n${body}\n$$`;
 }
 
 export function looksMathematical(text: string): boolean {
   const compact = text.replace(/\s/g, '');
   if (compact.length < 2) return false;
-  const mathSymbols = compact.match(/[=<>≤≥≠≈∑∏∫√∞∂∇α-ωΑ-Ω^_{}()[\]|+*/−]/gu)?.length ?? 0;
+  const mathSymbols = compact.match(/[=<>≤≥≠≈∑∏∫√∞∂∇α-ωΑ-Ω⁰-⁹₀-₉^_{}()[\]|+*/−]/gu)?.length ?? 0;
   const proseLetters = compact.match(/[A-Za-z]/g)?.length ?? 0;
-  return mathSymbols >= 2 && mathSymbols / compact.length > 0.12 && proseLetters / compact.length < 0.72;
+  const equationSignal = /[=≤≥≠≈]/u.test(compact) && /[A-Za-zα-ωΑ-Ω0-9]/u.test(compact);
+  return (mathSymbols >= 2 || equationSignal) && mathSymbols / compact.length > 0.08 && proseLetters / compact.length < 0.78;
 }
 
 export function escapeTableCell(value: unknown): string {
   return String(value ?? '')
-    .replace(/\r?\n/g, '<br>')
-    .replace(/\|/g, '\\|')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\n/g, '<br>')
+    .replace(/(?<!\\)\|/g, '\\|')
+    .replace(/\\$/g, '\\\\')
     .trim();
 }
 
+function numericColumn(cells: string[]): boolean {
+  const present = cells.map((cell) => cell.replace(/<br>/g, ' ').replace(/<!--.*?-->/g, '').trim()).filter(Boolean);
+  if (present.length < 2) return false;
+  const numeric = present.filter((cell) => /^[-+]?\s*(?:[$€£¥₹]\s*)?(?:\d{1,3}(?:[ ,]\d{3})*|\d+)(?:[.,]\d+)?(?:\s*%|\s*[A-Za-z]{1,4})?$/.test(cell));
+  return numeric.length / present.length >= 0.72;
+}
+
 export function markdownTable(rows: unknown[][]): string {
-  const width = Math.max(0, ...rows.map((row) => row.length));
+  let width = Math.max(0, ...rows.map((row) => row.length));
   if (!width || !rows.length) return '';
+  while (width > 1 && rows.every((row) => !String(row[width - 1] ?? '').trim())) width -= 1;
   const normalized = rows.map((row) => Array.from({ length: width }, (_, index) => escapeTableCell(row[index])));
   const header = normalized[0] ?? [];
   const body = normalized.slice(1);
+  const separators = header.map((_cell, column) => numericColumn(body.map((row) => row[column] ?? '')) ? '---:' : '---');
   return [
     `| ${header.join(' | ')} |`,
-    `| ${header.map(() => '---').join(' | ')} |`,
+    `| ${separators.join(' | ')} |`,
     ...body.map((row) => `| ${row.join(' | ')} |`),
   ].join('\n');
+}
+
+function protectHtmlMath(html: string): string {
+  const root = document.createElement('div');
+  root.innerHTML = html;
+  const textNodes: Text[] = [];
+  const visit = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      textNodes.push(node as Text);
+      return;
+    }
+    if (node instanceof Element && /^(?:CODE|PRE|SCRIPT|STYLE|TEXTAREA)$/i.test(node.tagName)) return;
+    Array.from(node.childNodes).forEach(visit);
+  };
+  visit(root);
+  const mathPattern = /(?<!\\)\$\$[\s\S]+?(?<!\\)\$\$|\\\[[\s\S]+?\\\]|(?<!\\)\$(?!\$)(?:\\.|[^$\n])+?(?<!\\)\$|\\\((?:\\.|[^\n])+?\\\)/g;
+  for (const textNode of textNodes) {
+    const source = textNode.data;
+    const matches = Array.from(source.matchAll(mathPattern));
+    if (!matches.length) continue;
+    const fragment = document.createDocumentFragment();
+    let cursor = 0;
+    for (const match of matches) {
+      const start = match.index ?? 0;
+      if (start > cursor) fragment.append(document.createTextNode(source.slice(cursor, start)));
+      const span = document.createElement('span');
+      span.dataset.math = match[0] ?? '';
+      span.textContent = match[0] ?? '';
+      fragment.append(span);
+      cursor = start + (match[0]?.length ?? 0);
+    }
+    if (cursor < source.length) fragment.append(document.createTextNode(source.slice(cursor)));
+    textNode.replaceWith(fragment);
+  }
+  return root.innerHTML;
 }
 
 export function htmlToMarkdown(html: string): string {
@@ -82,7 +198,7 @@ export function htmlToMarkdown(html: string): string {
     filter: (node) => node.nodeName === 'SPAN' && (node as HTMLElement).dataset.math !== undefined,
     replacement: (_content, node) => (node as HTMLElement).dataset.math ?? '',
   });
-  return normalizeMarkdown(turndown.turndown(html));
+  return normalizeMarkdown(turndown.turndown(protectHtmlMath(html)));
 }
 
 export function normalizeMarkdown(markdown: string): string {

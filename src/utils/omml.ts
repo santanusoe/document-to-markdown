@@ -1,4 +1,5 @@
 import { attrLocal, directLocal, firstLocal, localElements, textOf } from './xml';
+import { unicodeMathToLatex } from './markdown';
 
 const SYMBOLS: Record<string, string> = {
   '∑': '\\sum', '∏': '\\prod', '∫': '\\int', '∬': '\\iint', '∭': '\\iiint',
@@ -8,10 +9,10 @@ const SYMBOLS: Record<string, string> = {
 };
 
 function escapeText(text: string): string {
-  return Array.from(text)
+  return unicodeMathToLatex(Array.from(text)
     .map((character) => SYMBOLS[character] ?? character)
-    .join('')
-    .replace(/([#$%&_])/g, '\\$1')
+    .join(''))
+    .replace(/(?<!\\)([#$%&])/g, '\\$1')
     .replace(/\s+/g, ' ');
 }
 
@@ -21,6 +22,8 @@ function child(element: Element, name: string): Element | undefined {
 
 function propertyValue(element: Element, property: string, fallback = ''): string {
   const propertyElement = firstLocal(element, property);
+  const propertyAttribute = propertyElement ? attrLocal(propertyElement, 'val') : undefined;
+  if (propertyAttribute !== undefined) return propertyAttribute;
   const valueElement = propertyElement ? Array.from(propertyElement.children)[0] : undefined;
   return valueElement ? attrLocal(valueElement, 'val') ?? valueElement.textContent ?? fallback : fallback;
 }
@@ -40,7 +43,10 @@ function convertDelimiter(element: Element): string {
   const opening = propertyValue(element, 'begChr', '(') || '.';
   const closing = propertyValue(element, 'endChr', ')') || '.';
   const body = directLocal(element, 'e').map(convertChildren).join(' \\middle| ');
-  return `\\left${escapeText(opening)}${body}\\right${escapeText(closing)}`;
+  const delimiter = (value: string): string => ({
+    '{': '\\{', '}': '\\}', '‖': '\\Vert', '∥': '\\Vert', '⟨': '\\langle', '⟩': '\\rangle',
+  })[value] ?? escapeText(value);
+  return `\\left${delimiter(opening)}${body}\\right${delimiter(closing)}`;
 }
 
 function convertNary(element: Element): string {
@@ -121,7 +127,11 @@ function convertNode(element: Element): string {
     case 'func': {
       const functionName = child(element, 'fName');
       const expression = child(element, 'e');
-      return `${functionName ? convertChildren(functionName) : ''}\u2009${expression ? convertChildren(expression) : ''}`;
+      const name = functionName ? convertChildren(functionName).trim() : '';
+      const recognised = /^(?:sin|cos|tan|cot|sec|csc|log|ln|exp|lim|min|max|det|gcd)$/i.test(name)
+        ? `\\${name.toLowerCase()}`
+        : name ? `\\operatorname{${name}}` : '';
+      return `${recognised}\\,${expression ? convertChildren(expression) : ''}`;
     }
     case 'groupChr': {
       const expression = child(element, 'e');
@@ -151,7 +161,10 @@ function convertNode(element: Element): string {
 }
 
 export function ommlToLatex(element: Element): string {
-  return convertNode(element).replace(/\s+/g, ' ').trim();
+  return convertNode(element)
+    .replace(/\u2009/g, '\\,')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 export interface MathToken {

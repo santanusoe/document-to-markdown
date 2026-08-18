@@ -71,6 +71,12 @@ export async function packageResult(result: ConversionResult): Promise<Blob> {
   if (!folder) throw new Error('Could not create the output package.');
   folder.file(`${stemOf(result.sourceName)}.md`, result.markdown);
   for (const asset of result.assets) folder.file(`assets/${asset.name}`, asset.blob);
+  if (result.assets.length) {
+    folder.file(
+      'README.txt',
+      `Open ${stemOf(result.sourceName)}.md without moving it away from the assets folder.\n\nThe relative image links in the Markdown file resolve to ./assets/. GitHub, VS Code, Obsidian, Typora, and other GFM-compatible renderers will then display the preserved figures.\n`,
+    );
+  }
   folder.file(
     'conversion-report.json',
     JSON.stringify(
@@ -108,6 +114,9 @@ export async function packageAll(results: ConversionResult[]): Promise<Blob> {
     if (!folder) continue;
     folder.file(`${stemOf(result.sourceName)}.md`, result.markdown);
     for (const asset of result.assets) folder.file(`assets/${asset.name}`, asset.blob);
+    if (result.assets.length) {
+      folder.file('README.txt', `Keep ${stemOf(result.sourceName)}.md beside the assets folder so that its figure links remain valid.\n`);
+    }
   }
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
 }

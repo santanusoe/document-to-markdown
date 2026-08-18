@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  base: '/document-to-markdown/',
+  base: process.env.VITE_BASE_PATH || '/document-to-markdown/',
   build: {
     target: 'es2022',
     sourcemap: true,

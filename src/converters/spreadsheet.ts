@@ -2,7 +2,7 @@ import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import type { Asset, ConverterContext, Metric } from '../types';
 import { safeAssetName, uniqueAssetName } from '../utils/files';
-import { escapeTableCell, markdownTable, normalizeMarkdown } from '../utils/markdown';
+import { markdownTable, normalizeMarkdown } from '../utils/markdown';
 import { extractCharts } from '../utils/openxml';
 
 interface SpreadsheetConversion {
@@ -65,8 +65,16 @@ function complexTable(sheet: XLSX.WorkSheet, rows: string[][]): string {
         span?.rowspan && span.rowspan > 1 ? ` rowspan="${span.rowspan}"` : '',
         span?.colspan && span.colspan > 1 ? ` colspan="${span.colspan}"` : '',
       ].join('');
-      const value = escapeTableCell(rows[r - range.s.r]?.[c - range.s.c] ?? '');
-      html.push(`    <td${attributes}>${value}</td>`);
+      const raw = rows[r - range.s.r]?.[c - range.s.c] ?? '';
+      const formulaComment = raw.match(/\s*(<!--\s*formula:[\s\S]*?-->)\s*$/)?.[1] ?? '';
+      const visible = formulaComment ? raw.slice(0, raw.lastIndexOf(formulaComment)).trimEnd() : raw;
+      const value = visible
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\r?\n/g, '<br>');
+      const tag = r === range.s.r ? 'th' : 'td';
+      html.push(`    <${tag}${attributes}>${value}${formulaComment ? ` ${formulaComment}` : ''}</${tag}>`);
     }
     html.push('  </tr>');
   }
@@ -133,6 +141,12 @@ export async function convertSpreadsheet(
 
   context.onProgress({ phase: 'Recovering workbook media', percent: 78, detail: 'Images and cached chart series' });
   const packageData = await extractSpreadsheetPackage(buffer);
+  if (packageData.assets.length) {
+    sections.push([
+      '## Embedded workbook figures',
+      ...packageData.assets.map((asset, index) => `![Workbook figure ${index + 1}](assets/${asset.name})`),
+    ].join('\n\n'));
+  }
   sections.push(packageData.chartMarkdown);
   warnings.push(...packageData.warnings);
   if (totalRows > 20_000) warnings.push(`This workbook contains ${totalRows.toLocaleString()} rows. The complete output is retained, but browser preview performance may be slower.`);

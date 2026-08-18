@@ -9,9 +9,10 @@ import '@fontsource/dm-mono/latin-400.css';
 import '@fontsource/dm-mono/latin-500.css';
 import '@fontsource/playfair-display/latin-600-italic.css';
 import DOMPurify from 'dompurify';
+import katex from 'katex';
 import { marked } from 'marked';
-import renderMathInElement from 'katex/contrib/auto-render';
 import { ACCEPTED_EXTENSIONS, convertFile } from './converter';
+import { clearHistory, deleteHistory, loadHistory, saveHistory, type HistoryEntry } from './history';
 import { DEFAULT_OPTIONS, type ConversionOptions, type ConversionProgress, type ConversionResult } from './types';
 import { downloadBlob, packageAll, packageResult, stemOf } from './utils/files';
 
@@ -30,11 +31,15 @@ const state: {
   tab: 'preview' | 'markdown';
   busy: boolean;
   previewUrls: string[];
+  history: HistoryEntry[];
+  historyReady: boolean;
 } = {
   queue: [],
   tab: 'preview',
   busy: false,
   previewUrls: [],
+  history: [],
+  historyReady: false,
 };
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -48,6 +53,7 @@ app.innerHTML = `
     </a>
     <nav aria-label="Primary navigation">
       <button class="nav-link" type="button" data-open-formats>Formats</button>
+      <button class="nav-link" type="button" data-open-history>History</button>
       <a class="nav-link" href="https://github.com/santanusoe/document-to-markdown" target="_blank" rel="noreferrer">Source</a>
       <button class="theme-button" type="button" data-theme aria-label="Switch colour theme"><span aria-hidden="true">◐</span></button>
     </nav>
@@ -55,11 +61,32 @@ app.innerHTML = `
 
   <main>
     <section class="hero" aria-labelledby="hero-title">
-      <div class="eyebrow"><span></span> Private by architecture</div>
-      <h1 id="hero-title">Turn documents into<br><em>dependable Markdown.</em></h1>
-      <p>Structure-aware conversion for text, tables, equations and visuals. Everything runs inside your browser—your files are never uploaded to a server.</p>
-      <div class="trust-row" aria-label="Privacy guarantees">
-        <span><i>✓</i> No API keys</span><span><i>✓</i> No file uploads</span><span><i>✓</i> Open source</span>
+      <div class="hero-copy">
+        <div class="eyebrow"><span></span> Document intelligence, on device</div>
+        <h1 id="hero-title">Extract the document.<br><em>Keep the meaning.</em></h1>
+        <p>High-fidelity Markdown reconstruction for dense PDFs, Office files, tables, equations and visual research. Review the evidence behind every conversion.</p>
+        <div class="hero-actions">
+          <a class="primary-button hero-button" href="#workspace">Convert a document <span aria-hidden="true">↓</span></a>
+          <button class="secondary-button hero-button" type="button" data-open-formats>Explore formats</button>
+        </div>
+        <p class="hero-footnote"><span aria-hidden="true"></span> Processing and personal history stay inside this browser.</p>
+      </div>
+      <div class="hero-stage" aria-hidden="true">
+        <div class="source-sheet">
+          <div class="sheet-bar"><span>source.pdf</span><i>14 pages</i></div>
+          <b></b><b></b><b class="short"></b>
+          <div class="mini-table"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="mini-equation">∑ xᵢ → <strong>f(x)</strong></div>
+          <span class="figure-chip">FIG. 03</span>
+        </div>
+        <div class="conversion-rail"><span>LOCAL</span><i></i><b>↓</b><i></i></div>
+        <div class="markdown-sheet">
+          <div class="sheet-bar"><span>output.md</span><i>ready</i></div>
+          <code># Findings</code><code>## Method</code>
+          <b></b><b class="short"></b>
+          <div class="markdown-table">| Method | Rate |<br>| — | — |<br>| F-B | O(1/N) |</div>
+          <div class="quality-stamp"><span>96</span><small>STRUCTURE<br>SIGNALS</small></div>
+        </div>
       </div>
     </section>
 
@@ -80,7 +107,7 @@ app.innerHTML = `
           <span class="local-pill">On device</span>
         </div>
         <label class="setting-row">
-          <span><strong>Preserve visual pages</strong><small>Keep graph- and diagram-heavy PDF pages as linked PNGs.</small></span>
+          <span><strong>Preserve figures + visual pages</strong><small>Crop meaningful figures and keep the complete page as a lossless fallback.</small></span>
           <input type="checkbox" data-option="preserveVisualPages" checked /><i></i>
         </label>
         <label class="setting-row">
@@ -124,16 +151,26 @@ app.innerHTML = `
       </div>
     </section>
 
+    <section class="history-section" id="history" aria-labelledby="history-title">
+      <div class="history-heading">
+        <div class="section-title-lockup"><span class="step-number">03</span><div><div class="eyebrow"><span></span> Private, per-browser archive</div><h2 id="history-title">Your conversion history.</h2><p>Each visitor sees only the conversions saved in their own browser profile.</p></div></div>
+        <button class="secondary-button" type="button" data-clear-history>Clear history</button>
+      </div>
+      <div class="history-list" data-history-list aria-live="polite">
+        <div class="history-loading"><span></span> Loading local history…</div>
+      </div>
+    </section>
+
     <section class="method-section" aria-labelledby="method-title">
       <div class="method-heading">
-        <span class="step-number">03</span>
+        <span class="step-number">04</span>
         <div><div class="eyebrow"><span></span> Fidelity by source structure</div><h2 id="method-title">The right method for each format.</h2></div>
       </div>
       <div class="method-grid">
         <article><span class="method-icon">¶</span><h3>Digital documents</h3><p>DOCX, PPTX, ODT and EPUB are read from their semantic XML—not flattened into screenshots.</p><small>Headings · lists · links · footnotes · media</small></article>
         <article><span class="method-icon">▦</span><h3>Tables and workbooks</h3><p>Native cells, formulae, merges and cached chart series are reconstructed deterministically.</p><small>GFM tables · HTML spans · formula comments</small></article>
         <article><span class="method-icon">∑</span><h3>Mathematics</h3><p>Office Math becomes LaTeX structurally. PDF formulae are flagged for review and paired with the source visual.</p><small>OMML → LaTeX · MathML retained</small></article>
-        <article><span class="method-icon">◫</span><h3>Scans and figures</h3><p>OCR runs locally, while graphs and diagrams remain linked to authoritative visual assets.</p><small>Local OCR · page visual layer · no uploads</small></article>
+        <article><span class="method-icon">◫</span><h3>Scans and figures</h3><p>OCR runs locally. Raster figures and caption-led vector graphs are exported beside a complete page fallback.</p><small>Figure crops · local OCR · visual evidence</small></article>
       </div>
     </section>
   </main>
@@ -169,7 +206,8 @@ const fileList = document.querySelector<HTMLElement>('[data-file-list]')!;
 const output = document.querySelector<HTMLElement>('[data-output]')!;
 const summary = document.querySelector<HTMLElement>('[data-summary]')!;
 const toast = document.querySelector<HTMLElement>('[data-toast]')!;
-if (!input || !dropZone || !resultsShell || !fileList || !output || !summary || !toast) throw new Error('Required interface elements are missing.');
+const historyList = document.querySelector<HTMLElement>('[data-history-list]')!;
+if (!input || !dropZone || !resultsShell || !fileList || !output || !summary || !toast || !historyList) throw new Error('Required interface elements are missing.');
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character] ?? character);
@@ -179,6 +217,77 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1_048_576) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1_048_576).toFixed(1)} MB`;
+}
+
+function formatHistoryDate(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  }).format(new Date(timestamp));
+}
+
+function renderHistory(): void {
+  if (!state.historyReady) {
+    historyList.innerHTML = '<div class="history-loading"><span></span> Loading local history…</div>';
+    return;
+  }
+  if (!state.history.length) {
+    historyList.innerHTML = `<div class="history-empty"><span aria-hidden="true">↺</span><div><h3>No conversions saved yet</h3><p>Completed files will appear here automatically and remain visible only in this browser.</p></div><a href="#workspace">Start a conversion</a></div>`;
+    return;
+  }
+  historyList.innerHTML = state.history.map((entry) => {
+    const reviewCount = entry.metrics.filter((metric) => metric.level === 'review').length + entry.warnings.length;
+    const nativeCount = entry.metrics.filter((metric) => metric.level === 'high').length;
+    const pageText = entry.pageCount ? `${entry.pageCount} page${entry.pageCount === 1 ? '' : 's'} · ` : '';
+    return `<article class="history-card">
+      <button class="history-open" type="button" data-history-open="${entry.id}" aria-label="Open ${escapeHtml(entry.sourceName)} from history">
+        <span class="history-icon">${iconFor(entry.sourceName)}</span>
+        <span class="history-meta"><small>${escapeHtml(entry.sourceType)} · ${formatHistoryDate(entry.createdAt)}</small><strong title="${escapeHtml(entry.sourceName)}">${escapeHtml(entry.sourceName)}</strong><i>${pageText}${entry.wordCount.toLocaleString()} words · ${(entry.elapsedMs / 1000).toFixed(1)} s</i></span>
+      </button>
+      <div class="history-signals" aria-label="Conversion signals"><span>${nativeCount} native signals</span><span class="${reviewCount ? 'needs-review' : ''}">${reviewCount ? `${reviewCount} review notes` : 'No review flags'}</span>${entry.assetsStored && entry.assets.length ? `<span>${entry.assets.length} assets saved</span>` : ''}</div>
+      <div class="history-actions"><button type="button" data-history-download="${entry.id}">${entry.assets.length ? 'Download complete ZIP' : 'Download .md'}</button><button type="button" data-history-delete="${entry.id}" aria-label="Delete ${escapeHtml(entry.sourceName)} from history">Delete</button></div>
+    </article>`;
+  }).join('');
+
+  historyList.querySelectorAll<HTMLButtonElement>('[data-history-open]').forEach((button) => button.addEventListener('click', () => {
+    const entry = state.history.find((candidate) => candidate.id === button.dataset.historyOpen);
+    if (!entry) return;
+    const existing = state.queue.find((item) => item.result?.id === entry.id);
+    if (existing) {
+      state.selectedId = existing.id;
+    } else {
+      const file = new File([entry.markdown], entry.sourceName, { type: 'text/markdown', lastModified: entry.createdAt });
+      const item: QueueItem = { id: crypto.randomUUID(), file, status: 'done', progress: { phase: 'Complete', percent: 100 }, result: entry };
+      state.queue.unshift(item);
+      state.selectedId = item.id;
+    }
+    renderQueue();
+    renderOutput();
+    resultsShell.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
+  historyList.querySelectorAll<HTMLButtonElement>('[data-history-download]').forEach((button) => button.addEventListener('click', async () => {
+    const entry = state.history.find((candidate) => candidate.id === button.dataset.historyDownload);
+    if (!entry) return;
+    if (entry.assets.length) {
+      showToast('Building complete package with figures…');
+      downloadBlob(await packageResult(entry), `${stemOf(entry.sourceName)}-markdown.zip`);
+    } else {
+      downloadBlob(new Blob([entry.markdown], { type: 'text/markdown;charset=utf-8' }), `${stemOf(entry.sourceName)}.md`);
+    }
+  }));
+  historyList.querySelectorAll<HTMLButtonElement>('[data-history-delete]').forEach((button) => button.addEventListener('click', async () => {
+    const id = button.dataset.historyDelete;
+    if (!id) return;
+    await deleteHistory(id);
+    state.history = state.history.filter((entry) => entry.id !== id);
+    renderHistory();
+    showToast('History entry deleted');
+  }));
+}
+
+async function refreshHistory(): Promise<void> {
+  state.history = await loadHistory();
+  state.historyReady = true;
+  renderHistory();
 }
 
 function iconFor(name: string): string {
@@ -239,12 +348,44 @@ function fidelityBadge(level: string): string {
   return level === 'high' ? 'Native/high' : level === 'medium' ? 'Inferred' : 'Review';
 }
 
+function protectMathForPreview(markdown: string): { markdown: string; tokens: Array<{ token: string; source: string }> } {
+  const tokens: Array<{ token: string; source: string }> = [];
+  const protect = (segment: string): string => segment.replace(
+    /(?<!\\)\$\$[\s\S]+?(?<!\\)\$\$|\\\[[\s\S]+?\\\]|(?<!\\)\$(?!\$)(?:\\.|[^$\n])+?(?<!\\)\$|\\\((?:\\.|[^\n])+?\\\)/g,
+    (source) => {
+      const token = `FIDELITYMATHTOKEN${tokens.length}END`;
+      tokens.push({ token, source });
+      return token;
+    },
+  );
+  const fenced = /((?:`{3,}|~{3,})[^\n]*\n[\s\S]*?\n(?:`{3,}|~{3,}))/g;
+  return {
+    markdown: markdown.split(fenced).map((segment, index) => index % 2 ? segment : protect(segment)).join(''),
+    tokens,
+  };
+}
+
 function renderMarkdownPreview(result: ConversionResult): void {
   const preview = output.querySelector<HTMLElement>('[data-preview]');
   if (!preview) return;
   revokePreviewUrls();
-  const raw = marked.parse(result.markdown, { gfm: true, breaks: false }) as string;
-  preview.innerHTML = DOMPurify.sanitize(raw, { ADD_TAGS: ['math', 'mrow', 'mi', 'mo', 'mn', 'msup', 'msub', 'mfrac'], ADD_ATTR: ['display', 'rowspan', 'colspan'] });
+  const protectedMath = protectMathForPreview(result.markdown);
+  let raw = marked.parse(protectedMath.markdown, { gfm: true, breaks: false }) as string;
+  protectedMath.tokens.forEach((token, index) => {
+    raw = raw.replaceAll(token.token, `<span data-fidelity-math="${index}"></span>`);
+  });
+  preview.innerHTML = DOMPurify.sanitize(raw, { ADD_TAGS: ['math', 'mrow', 'mi', 'mo', 'mn', 'msup', 'msub', 'mfrac'], ADD_ATTR: ['display', 'rowspan', 'colspan', 'data-fidelity-math'] });
+  preview.querySelectorAll<HTMLElement>('[data-fidelity-math]').forEach((element) => {
+    const index = Number(element.dataset.fidelityMath);
+    const source = protectedMath.tokens[index]?.source ?? '';
+    const display = source.startsWith('$$') || source.startsWith('\\[');
+    const latex = source.startsWith('$$')
+      ? source.slice(2, -2)
+      : source.startsWith('$')
+        ? source.slice(1, -1)
+        : source.slice(2, -2);
+    katex.render(latex.trim(), element, { displayMode: display, throwOnError: false, strict: false });
+  });
   preview.querySelectorAll<HTMLImageElement>('img[src^="assets/"]').forEach((image) => {
     const name = image.getAttribute('src')?.replace(/^assets\//, '');
     const asset = result.assets.find((candidate) => candidate.name === name);
@@ -253,20 +394,6 @@ function renderMarkdownPreview(result: ConversionResult): void {
     state.previewUrls.push(url);
     image.src = url;
   });
-  try {
-    renderMathInElement(preview, {
-      delimiters: [
-        { left: '$$', right: '$$', display: true },
-        { left: '\\[', right: '\\]', display: true },
-        { left: '$', right: '$', display: false },
-        { left: '\\(', right: '\\)', display: false },
-      ],
-      throwOnError: false,
-      strict: false,
-    });
-  } catch {
-    // The source remains visible when a malformed equation cannot be rendered.
-  }
 }
 
 function renderOutput(): void {
@@ -294,7 +421,7 @@ function renderOutput(): void {
   output.innerHTML = `
     <div class="output-header">
       <div><span class="success-kicker">✓ Conversion complete</span><h3>${escapeHtml(result.sourceName)}</h3><p>${result.sourceType} · ${result.wordCount.toLocaleString()} words · ${result.assets.length} assets · ${(result.elapsedMs / 1000).toFixed(1)} s</p></div>
-      <div class="output-actions"><button class="secondary-button" type="button" data-copy>Copy</button><button class="secondary-button" type="button" data-download-md>Download .md</button><button class="primary-button compact" type="button" data-download>Package + assets</button></div>
+      <div class="output-actions"><button class="secondary-button" type="button" data-copy>Copy source</button>${result.assets.length ? '<button class="secondary-button" type="button" data-download-md title="Markdown only; linked figures require the assets folder">Markdown only</button><button class="primary-button compact" type="button" data-download>Download complete ZIP</button>' : '<button class="primary-button compact" type="button" data-download-md>Download .md</button>'}</div>
     </div>
     <section class="fidelity-report" aria-labelledby="report-${result.id}">
       <div class="report-title"><div><span class="step-number">F</span><div><h4 id="report-${result.id}">Fidelity report</h4><p>Evidence behind this conversion</p></div></div><span class="report-policy">No universal “99%” claim</span></div>
@@ -324,7 +451,7 @@ function renderOutput(): void {
     downloadBlob(new Blob([result.markdown], { type: 'text/markdown;charset=utf-8' }), `${stemOf(result.sourceName)}.md`);
   });
   output.querySelector('[data-download]')?.addEventListener('click', async () => {
-    showToast('Building download package…');
+    showToast('Building complete package with figures…');
     downloadBlob(await packageResult(result), `${stemOf(result.sourceName)}-markdown.zip`);
   });
 }
@@ -354,6 +481,8 @@ async function processQueue(): Promise<void> {
       });
       item.status = 'done';
       item.progress = { phase: 'Complete', percent: 100 };
+      await saveHistory(item.result);
+      await refreshHistory();
     } catch (error) {
       item.status = 'error';
       item.error = error instanceof Error ? error.message : String(error);
@@ -414,7 +543,7 @@ document.querySelector('[data-sample]')?.addEventListener('click', () => {
 });
 
 const dialog = document.querySelector<HTMLDialogElement>('[data-formats-dialog]');
-document.querySelector('[data-open-formats]')?.addEventListener('click', () => dialog?.showModal());
+document.querySelectorAll('[data-open-formats]').forEach((button) => button.addEventListener('click', () => dialog?.showModal()));
 document.querySelector('[data-close-formats]')?.addEventListener('click', () => dialog?.close());
 dialog?.addEventListener('click', (event) => {
   if (event.target === dialog) dialog.close();
@@ -428,5 +557,19 @@ document.querySelector('[data-theme]')?.addEventListener('click', () => {
   localStorage.setItem('fidelitymd-theme', dark ? 'dark' : 'light');
 });
 
+document.querySelector('[data-open-history]')?.addEventListener('click', () => {
+  document.querySelector('#history')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+document.querySelector('[data-clear-history]')?.addEventListener('click', async () => {
+  if (!state.history.length) return showToast('History is already empty');
+  if (!window.confirm('Delete every conversion saved in this browser? This cannot be undone.')) return;
+  await clearHistory();
+  state.history = [];
+  renderHistory();
+  showToast('Local history cleared');
+});
+
 renderQueue();
 renderOutput();
+renderHistory();
+void refreshHistory();

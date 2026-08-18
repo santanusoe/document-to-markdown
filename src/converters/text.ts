@@ -73,9 +73,24 @@ function stripRtf(input: string): string {
     .trim();
 }
 
+function latexTabularToMarkdown(body: string): string {
+  const rows = body
+    .replace(/\\(?:toprule|midrule|bottomrule|hline|cline\{[^}]*})/g, '')
+    .split(/\\\\(?:\[[^\]]*])?\s*(?:\r?\n|$)/)
+    .map((row) => row.trim())
+    .filter(Boolean)
+    .map((row) => row.split(/(?<!\\)&/).map((cell) => cell
+      .replace(/\\multicolumn\{\d+}\{[^}]*}\{([^}]*)}/g, '$1')
+      .replace(/\\(?:textbf|textit|emph)\{([^{}]*)}/g, '$1')
+      .replace(/\\&/g, '&')
+      .trim()));
+  return markdownTable(rows);
+}
+
 function latexToMarkdown(input: string): string {
   let output = input
-    .replace(/%.*$/gm, '')
+    .replace(/(?<!\\)%.*$/gm, '')
+    .replace(/\\begin\{tabular}\{[^}]*}([\s\S]*?)\\end\{tabular}/g, (_match, body: string) => `\n\n${latexTabularToMarkdown(body)}\n\n`)
     .replace(/\\documentclass(?:\[[^\]]*])?\{[^}]*}/g, '')
     .replace(/\\usepackage(?:\[[^\]]*])?\{[^}]*}/g, '')
     .replace(/\\begin\{document}|\\end\{document}/g, '')
@@ -85,9 +100,10 @@ function latexToMarkdown(input: string): string {
     .replace(/\\paragraph\*?\{([^}]*)}/g, '#### $1')
     .replace(/\\textbf\{([^{}]*)}/g, '**$1**')
     .replace(/\\(?:textit|emph)\{([^{}]*)}/g, '*$1*')
-    .replace(/\\begin\{(?:equation\*?|displaymath)}([\s\S]*?)\\end\{(?:equation\*?|displaymath)}/g, '$$$1$$')
-    .replace(/\\\[([\s\S]*?)\\\]/g, '$$$1$$')
-    .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$')
+    .replace(/\\begin\{(?:equation\*?|displaymath)}([\s\S]*?)\\end\{(?:equation\*?|displaymath)}/g, (_match, body: string) => `\n\n$$\n${body.trim()}\n$$\n\n`)
+    .replace(/\\begin\{(?:align\*?|aligned|gather\*?|multline\*?)}([\s\S]*?)\\end\{(?:align\*?|aligned|gather\*?|multline\*?)}/g, (_match, body: string) => `\n\n$$\n\\begin{aligned}\n${body.trim()}\n\\end{aligned}\n$$\n\n`)
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_match, body: string) => `\n\n$$\n${body.trim()}\n$$\n\n`)
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_match, body: string) => `$${body.trim()}$`)
     .replace(/\\begin\{itemize}/g, '')
     .replace(/\\begin\{enumerate}/g, '')
     .replace(/\\end\{itemize}|\\end\{enumerate}/g, '')

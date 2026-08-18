@@ -45,6 +45,13 @@ const formulaCases = [
   '∠ABC',
   '∴ x = y',
   'ℏω = E',
+  'x̄ + ŷ = z',
+  'sin(x) <= 1',
+  'limₙ→∞ aₙ',
+  '⌈x⌉ = ⌊y⌋',
+  '⟨u,v⟩',
+  'f′(x)',
+  'x^10 + y_i',
 ];
 
 const tableCases: unknown[][][] = [
@@ -59,12 +66,16 @@ const tableCases: unknown[][][] = [
 ];
 
 describe('rendering fidelity benchmark', () => {
-  it('renders all 40 representative Unicode-to-LaTeX cases without a KaTeX error', () => {
+  it('renders all 47 representative Unicode-to-LaTeX cases without a KaTeX error', () => {
     for (const source of formulaCases) {
       const latex = unicodeMathToLatex(source);
       expect(() => katex.renderToString(latex, { displayMode: true, throwOnError: true, strict: 'error' })).not.toThrow();
     }
     expect(unicodeMathToLatex('αx + βy')).toBe('\\alpha x + \\beta y');
+    expect(unicodeMathToLatex('x̄ + ŷ = z')).toBe('\\bar{x} + \\hat{y} = z');
+    expect(unicodeMathToLatex('sin(x) <= 1')).toBe('\\sin(x) \\leq 1');
+    expect(unicodeMathToLatex('∂u/∂t')).toBe('\\frac{\\partial u}{\\partial t}');
+    expect(unicodeMathToLatex('x^10 + y_i')).toBe('x^{10} + y_{i}');
     const multiline = displayMath(['x₁ = y', 'x₂ = z']);
     expect(multiline).toContain(' \\\\ \n');
     expect(() => katex.renderToString(multiline.slice(2, -2).trim(), { displayMode: true, throwOnError: true })).not.toThrow();

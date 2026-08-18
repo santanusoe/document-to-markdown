@@ -34,6 +34,7 @@ interface TextPiece {
 interface PdfLine {
   text: string;
   mathText: string;
+  pieces: TextPiece[];
   cells: string[];
   cellXs: number[];
   x: number;
@@ -52,14 +53,29 @@ interface PageModel {
   width: number;
   height: number;
   lines: PdfLine[];
+  rules: HorizontalRule[];
   scanned: boolean;
   ocrConfidence?: number;
   multiColumn: boolean;
   visualAsset?: string;
   figures: PreservedFigure[];
+  equationAssets: Record<number, string>;
   tableCount: number;
   equationCount: number;
   linkCount: number;
+}
+
+interface HorizontalRule {
+  left: number;
+  right: number;
+  y: number;
+}
+
+interface EquationRun {
+  start: number;
+  end: number;
+  expressions: string[];
+  label?: string;
 }
 
 interface PreservedFigure {
@@ -348,6 +364,7 @@ function linesFromPieces(pieces: TextPiece[], pageWidth: number): { lines: PdfLi
     return {
       text: joined.text,
       mathText: joined.mathText,
+      pieces: row,
       cells: joined.cells,
       cellXs: joined.cellXs,
       x: first?.x ?? 0,
@@ -459,6 +476,173 @@ function splitEquationLabel(value: string): { label?: string; expression: string
     : { expression: value };
 }
 
+function mathFromPieces(pieces: TextPiece[]): string {
+  if (!pieces.length) return '';
+  const ordered = [...pieces].sort((left, right) => left.x - right.x);
+  const typicalHeight = median(ordered.map((piece) => piece.height)) || 10;
+  const characterWidth = median(ordered
+    .map((piece) => piece.width / Math.max(1, Array.from(piece.text).length))
+    .filter(Boolean)) || typicalHeight * 0.45;
+  return pieceSequenceMath(ordered, characterWidth);
+}
+
+function piecesInsideRule(line: PdfLine, rule: HorizontalRule, padding: number): TextPiece[] {
+  return line.pieces.filter((piece) => {
+    const left = piece.x;
+    const right = piece.x + piece.width;
+    const overlap = Math.max(0, Math.min(right, rule.right + padding) - Math.max(left, rule.left - padding));
+    return overlap >= Math.min(piece.width * 0.35, padding * 0.65) || (left + right) / 2 >= rule.left - padding && (left + right) / 2 <= rule.right + padding;
+  });
+}
+
+function conciseMathComponent(value: string): boolean {
+  const text = value.trim();
+  if (!text || text.length > 72 || /[.!?;:]$/.test(text)) return false;
+  const proseWords = text.match(/[A-Za-z]{4,}/g)?.length ?? 0;
+  return proseWords <= 1 && /[A-Za-z0-9α-ωΑ-Ω∂∇∞+*/=<>≤≥≠≈()\[\]{}−-]/u.test(text);
+}
+
+function fractionEquationRun(
+  lines: PdfLine[],
+  rules: HorizontalRule[],
+  index: number,
+  bodyHeight: number,
+): EquationRun | undefined {
+  const verticalRange = Math.max(bodyHeight * 2.4, 18);
+  for (const rule of rules) {
+    const ruleWidth = rule.right - rule.left;
+    const padding = Math.max(bodyHeight * 0.38, ruleWidth * 0.08, 2);
+    const fragments = lines.map((line, lineIndex) => {
+      const pieces = piecesInsideRule(line, rule, padding);
+      return { line, lineIndex, pieces, text: mathFromPieces(pieces) };
+    });
+    const numerator = fragments
+      .filter((candidate) => candidate.line.y > rule.y + 0.5 && candidate.line.y - rule.y <= verticalRange && conciseMathComponent(candidate.text))
+      .sort((left, right) => left.line.y - right.line.y)[0];
+    const denominator = fragments
+      .filter((candidate) => candidate.line.y < rule.y - 0.5 && rule.y - candidate.line.y <= verticalRange && conciseMathComponent(candidate.text))
+      .sort((left, right) => right.line.y - left.line.y)[0];
+    if (!numerator || !denominator || numerator.lineIndex === denominator.lineIndex) continue;
+
+    const fragmentCenter = (pieces: TextPiece[]): number => {
+      const left = Math.min(...pieces.map((piece) => piece.x));
+      const right = Math.max(...pieces.map((piece) => piece.x + piece.width));
+      return (left + right) / 2;
+    };
+    const numeratorCenter = fragmentCenter(numerator.pieces);
+    const denominatorCenter = fragmentCenter(denominator.pieces);
+    if (Math.abs(numeratorCenter - denominatorCenter) > Math.max(ruleWidth * 0.38, bodyHeight * 0.85)) continue;
+
+    const midpoint = (numerator.line.y + denominator.line.y) / 2;
+    const base = lines
+      .map((line, lineIndex) => ({ line, lineIndex }))
+      .filter((candidate) => candidate.lineIndex !== numerator.lineIndex && candidate.lineIndex !== denominator.lineIndex)
+      .map((candidate) => ({
+        ...candidate,
+        outside: candidate.line.pieces.filter((piece) => piece.x + piece.width / 2 < rule.left - padding * 0.2 || piece.x + piece.width / 2 > rule.right + padding * 0.2),
+      }))
+      .filter((candidate) => candidate.outside.length && Math.abs(candidate.line.y - midpoint) <= Math.max(bodyHeight, 9))
+      .sort((left, right) => Math.abs(left.line.y - midpoint) - Math.abs(right.line.y - midpoint))[0];
+
+    const before = base?.outside.filter((piece) => piece.x + piece.width / 2 < rule.left) ?? [];
+    const after = base?.outside.filter((piece) => piece.x + piece.width / 2 > rule.right) ?? [];
+    const fraction = `\\frac{${numerator.text}}{${denominator.text}}`;
+    const expression = [mathFromPieces(before), fraction, mathFromPieces(after)].filter(Boolean).join(' ');
+    const involved = [numerator.lineIndex, denominator.lineIndex, ...(base ? [base.lineIndex] : [])];
+    const start = Math.min(...involved);
+    const end = Math.max(...involved);
+    if (start !== index || end - start > 3) continue;
+    const labelled = splitEquationLabel(expression);
+    return labelled.label
+      ? { start, end, expressions: [labelled.expression], label: labelled.label }
+      : { start, end, expressions: [labelled.expression] };
+  }
+  return undefined;
+}
+
+function largeOperatorEquationRun(
+  lines: PdfLine[],
+  index: number,
+  bodyHeight: number,
+): EquationRun | undefined {
+  for (let baseIndex = index; baseIndex < Math.min(lines.length, index + 3); baseIndex += 1) {
+    const base = lines[baseIndex];
+    if (!base) continue;
+    const operatorIndex = base.pieces.findIndex((piece) => /^[∑∏∫∮⋃⋂]$/u.test(piece.text.trim()));
+    const operator = base.pieces[operatorIndex];
+    if (!operator) continue;
+    const center = operator.x + operator.width / 2;
+    const radius = Math.max(operator.width * 1.2, bodyHeight * 1.25);
+    const candidates = lines.map((line, lineIndex) => {
+      const pieces = line.pieces.filter((piece) => Math.abs(piece.x + piece.width / 2 - center) <= radius);
+      return { line, lineIndex, pieces, text: mathFromPieces(pieces) };
+    }).filter((candidate) => candidate.lineIndex !== baseIndex && conciseMathComponent(candidate.text));
+    const upper = candidates
+      .filter((candidate) => candidate.line.y > base.y + bodyHeight * 0.28 && candidate.line.y - base.y <= bodyHeight * 2.8)
+      .sort((left, right) => left.line.y - right.line.y)[0];
+    const lower = candidates
+      .filter((candidate) => candidate.line.y < base.y - bodyHeight * 0.28 && base.y - candidate.line.y <= bodyHeight * 2.8)
+      .sort((left, right) => right.line.y - left.line.y)[0];
+    if (!upper && !lower) continue;
+    const involved = [baseIndex, ...(upper ? [upper.lineIndex] : []), ...(lower ? [lower.lineIndex] : [])];
+    const start = Math.min(...involved);
+    const end = Math.max(...involved);
+    if (start !== index || end - start > 3) continue;
+    const before = mathFromPieces(base.pieces.slice(0, operatorIndex));
+    const after = mathFromPieces(base.pieces.slice(operatorIndex + 1));
+    const scriptedOperator = `${operator.text}${lower ? `_{${lower.text}}` : ''}${upper ? `^{${upper.text}}` : ''}`;
+    const labelled = splitEquationLabel([before, scriptedOperator, after].filter(Boolean).join(' '));
+    return labelled.label
+      ? { start, end, expressions: [labelled.expression], label: labelled.label }
+      : { start, end, expressions: [labelled.expression] };
+  }
+  return undefined;
+}
+
+function equationRunAt(
+  lines: PdfLine[],
+  rules: HorizontalRule[],
+  index: number,
+  bodyHeight: number,
+): EquationRun | undefined {
+  const fraction = fractionEquationRun(lines, rules, index, bodyHeight);
+  if (fraction) return fraction;
+  const largeOperator = largeOperatorEquationRun(lines, index, bodyHeight);
+  if (largeOperator) return largeOperator;
+  const line = lines[index];
+  if (!line || !mathematicalLine(line)) return undefined;
+  const labelled = splitEquationLabel(line.mathText || line.text);
+  const expressions = [labelled.expression];
+  let end = index;
+  while (end + 1 < lines.length) {
+    const current = lines[end];
+    const next = lines[end + 1];
+    if (!current || !next || !mathematicalLine(next) || current.gapAfter > bodyHeight * 2.2) break;
+    expressions.push(next.mathText || next.text);
+    end += 1;
+  }
+  return labelled.label
+    ? { start: index, end, expressions, label: labelled.label }
+    : { start: index, end, expressions };
+}
+
+function detectedEquationRuns(lines: PdfLine[], rules: HorizontalRule[], pageWidth: number): EquationRun[] {
+  const bodyHeight = dominantLineHeight(lines);
+  const runs: EquationRun[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const table = stableTableRun(lines, index, pageWidth);
+    if (table) {
+      index += table.length - 1;
+      continue;
+    }
+    const run = equationRunAt(lines, rules, index, bodyHeight);
+    if (!run) continue;
+    runs.push(run);
+    index = run.end;
+  }
+  return runs;
+}
+
 function headingLevel(line: PdfLine, bodyHeight: number): number | undefined {
   const text = line.text.trim();
   if (text.length < 2 || text.length > 150 || /[.!?;:]$/.test(text) || mathematicalLine(line, text)) return undefined;
@@ -515,20 +699,16 @@ function pageLinesToMarkdown(page: PageModel, ignored: Set<string>, dehyphenate:
       headingCount += 1;
       continue;
     }
-    if (mathematicalLine(line, text)) {
+    const equation = equationRunAt(page.lines, page.rules, index, bodyHeight);
+    if (equation) {
       flush();
-      const labelled = splitEquationLabel(line.mathText || text);
-      if (labelled.label) parts.push(`*${labelled.label.replace(/\*/g, '\\*')}*`);
-      const equationLines = [labelled.expression];
-      while (index + 1 < page.lines.length) {
-        const nextText = lines[index + 1]?.trim() ?? '';
-        const nextLine = page.lines[index + 1];
-        const currentLine = page.lines[index];
-        if (!nextLine || !currentLine || !mathematicalLine(nextLine, nextText) || currentLine.gapAfter > bodyHeight * 2.2) break;
-        equationLines.push(nextLine.mathText || nextText);
-        index += 1;
+      if (equation.label) parts.push(`*${equation.label.replace(/\*/g, '\\*')}*`);
+      parts.push(displayMath(equation.expressions));
+      const sourceAsset = page.equationAssets[equation.start];
+      if (sourceAsset) {
+        parts.push(`> **Source equation visual - PDF page ${page.pageNumber}.** This exact crop is retained beside the reconstructed LaTeX for visual verification.\n\n![Source equation visual - PDF page ${page.pageNumber}](assets/${sourceAsset})`);
       }
-      parts.push(displayMath(equationLines));
+      index = equation.end;
       continue;
     }
     if (/^(?:[•▪◦‣]|[-–—])\s+/.test(text)) {
@@ -656,6 +836,47 @@ async function cropFigure(
   return canvasToBlob(crop);
 }
 
+async function preserveEquationVisuals(
+  canvas: HTMLCanvasElement,
+  runs: EquationRun[],
+  lines: PdfLine[],
+  layoutWidth: number,
+  layoutHeight: number,
+  pageNumber: number,
+  assets: Asset[],
+): Promise<Record<number, string>> {
+  const equationAssets: Record<number, string> = {};
+  for (let index = 0; index < runs.length; index += 1) {
+    const run = runs[index];
+    if (!run) continue;
+    const sourceLines = lines.slice(run.start, run.end + 1);
+    const sourcePieces = sourceLines.flatMap((line) => line.pieces);
+    if (!sourcePieces.length) continue;
+    const left = Math.min(...sourcePieces.map((piece) => piece.x));
+    const right = Math.max(...sourcePieces.map((piece) => piece.x + piece.width));
+    const bottomY = Math.min(...sourcePieces.map((piece) => piece.y));
+    const topY = Math.max(...sourcePieces.map((piece) => piece.y + piece.height));
+    const horizontalPadding = Math.max(layoutWidth * 0.012, 7);
+    const verticalPadding = Math.max(layoutHeight * 0.008, 6);
+    const region: NormalizedRegion = {
+      left: clampUnit((left - horizontalPadding) / Math.max(1, layoutWidth)),
+      right: clampUnit((right + horizontalPadding) / Math.max(1, layoutWidth)),
+      top: clampUnit(1 - (topY + verticalPadding) / Math.max(1, layoutHeight)),
+      bottom: clampUnit(1 - (bottomY - verticalPadding) / Math.max(1, layoutHeight)),
+    };
+    if (region.right - region.left < 0.02 || region.bottom - region.top < 0.012) continue;
+    const name = uniqueAssetName(safeAssetName(`page-${pageNumber}-equation-${index + 1}.png`), assets);
+    assets.push({
+      name,
+      blob: await cropFigure(canvas, region),
+      kind: 'image',
+      source: `PDF page ${pageNumber} exact equation crop`,
+    });
+    equationAssets[run.start] = name;
+  }
+  return equationAssets;
+}
+
 async function preserveFigures(
   canvas: HTMLCanvasElement,
   imageRegions: NormalizedRegion[],
@@ -767,8 +988,22 @@ async function createOcrSession(): Promise<OcrSession> {
   };
 }
 
-async function hasVisualOperators(page: PdfPage): Promise<boolean> {
-  const operations = await page.getOperatorList();
+function numericBounds(value: unknown): number[] {
+  if (Array.isArray(value)) return value.map(Number).filter(Number.isFinite);
+  if (ArrayBuffer.isView(value)) return Array.from(value as unknown as ArrayLike<number>).map(Number).filter(Number.isFinite);
+  if (value && typeof value === 'object') {
+    return Object.entries(value)
+      .filter(([key]) => /^\d+$/.test(key))
+      .sort(([left], [right]) => Number(left) - Number(right))
+      .map(([, item]) => Number(item))
+      .filter(Number.isFinite);
+  }
+  return [];
+}
+
+async function pageGraphics(page: PdfPage, pageWidth: number): Promise<{ rules: HorizontalRule[]; hasVisual: boolean }> {
+  const operations = await page.getOperatorList().catch(() => undefined);
+  if (!operations) return { rules: [], hasVisual: false };
   const imageCodes = new Set([
     pdfjs.OPS.paintImageXObject,
     pdfjs.OPS.paintInlineImageXObject,
@@ -777,12 +1012,30 @@ async function hasVisualOperators(page: PdfPage): Promise<boolean> {
   ]);
   const pathCodes = new Set([pdfjs.OPS.constructPath, pdfjs.OPS.stroke, pdfjs.OPS.fill, pdfjs.OPS.eoFill]);
   let pathCount = 0;
-  for (const code of operations.fnArray) {
-    if (imageCodes.has(code)) return true;
-    if (code === pdfjs.OPS.shadingFill) return true;
+  let hasVisual = false;
+  const rules: HorizontalRule[] = [];
+  const seen = new Set<string>();
+  for (let index = 0; index < operations.fnArray.length; index += 1) {
+    const code = operations.fnArray[index];
+    if (code === undefined) continue;
+    if (imageCodes.has(code) || code === pdfjs.OPS.shadingFill) hasVisual = true;
     if (pathCodes.has(code)) pathCount += 1;
+    if (code !== pdfjs.OPS.constructPath) continue;
+    const bounds = numericBounds(operations.argsArray[index]?.[2]);
+    if (bounds.length < 4) continue;
+    const left = Math.min(bounds[0] ?? 0, bounds[2] ?? 0);
+    const right = Math.max(bounds[0] ?? 0, bounds[2] ?? 0);
+    const bottom = Math.min(bounds[1] ?? 0, bounds[3] ?? 0);
+    const top = Math.max(bounds[1] ?? 0, bounds[3] ?? 0);
+    const width = right - left;
+    const height = top - bottom;
+    if (width < 4 || width > pageWidth * 0.46 || height > Math.max(1.6, width * 0.025)) continue;
+    const key = `${left.toFixed(1)}|${right.toFixed(1)}|${((top + bottom) / 2).toFixed(1)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rules.push({ left, right, y: (top + bottom) / 2 });
   }
-  return pathCount > 24;
+  return { rules, hasVisual: hasVisual || pathCount > 24 };
 }
 
 export async function convertPdf(
@@ -807,6 +1060,7 @@ export async function convertPdf(
       context.onProgress({ phase: `Analysing page ${pageNumber} of ${documentProxy.numPages}`, percent: Math.round(basePercent), detail: 'Reading font, text geometry and layout' });
       const page = await documentProxy.getPage(pageNumber);
       const viewport = page.getViewport({ scale: 1 });
+      const graphics = await pageGraphics(page, viewport.width);
       const content = await page.getTextContent({ includeMarkedContent: true, disableNormalization: false });
       let pieces = textPieces(content);
       let layoutWidth = viewport.width;
@@ -843,7 +1097,15 @@ export async function convertPdf(
       }
 
       const geometric = linesFromPieces(pieces, layoutWidth);
-      const equationCount = geometric.lines.filter((line) => mathematicalLine(line)).length;
+      const ruleScaleX = layoutWidth / Math.max(1, viewport.width);
+      const ruleScaleY = layoutHeight / Math.max(1, viewport.height);
+      const rules = graphics.rules.map((rule) => ({
+        left: rule.left * ruleScaleX,
+        right: rule.right * ruleScaleX,
+        y: rule.y * ruleScaleY,
+      }));
+      const equationRuns = detectedEquationRuns(geometric.lines, rules, layoutWidth);
+      const equationCount = equationRuns.length;
       let tableCount = 0;
       for (let index = 0; index < geometric.lines.length; index += 1) {
         const table = stableTableRun(geometric.lines, index, layoutWidth);
@@ -853,13 +1115,27 @@ export async function convertPdf(
         }
       }
       const visual = context.options.preserveVisualPages && (
-        scanned || tableCount > 0 || equationCount > 0 || await hasVisualOperators(page)
+        scanned || tableCount > 0 || equationCount > 0 || graphics.hasVisual
       );
       let visualAsset: string | undefined;
       let figures: PreservedFigure[] = [];
+      let equationAssets: Record<number, string> = {};
       if (visual) {
         visualPages += 1;
         rendered ??= await renderPage(page, 2.2, true);
+        try {
+          equationAssets = await preserveEquationVisuals(
+            rendered.canvas,
+            equationRuns,
+            geometric.lines,
+            layoutWidth,
+            layoutHeight,
+            pageNumber,
+            assets,
+          );
+        } catch (error) {
+          warnings.push(`Equation crops on page ${pageNumber} could not be preserved: ${error instanceof Error ? error.message : String(error)}. The complete page visual was retained instead.`);
+        }
         try {
           figures = await preserveFigures(
             rendered.canvas,
@@ -881,11 +1157,13 @@ export async function convertPdf(
         width: layoutWidth,
         height: layoutHeight,
         lines: geometric.lines,
+        rules,
         scanned,
         ocrConfidence,
         multiColumn: geometric.multiColumn,
         visualAsset,
         figures,
+        equationAssets,
         tableCount,
         equationCount,
         linkCount,
@@ -932,6 +1210,7 @@ export async function convertPdf(
 
   const tableCount = pages.reduce((sum, page) => sum + page.tableCount, 0);
   const equationCount = pages.reduce((sum, page) => sum + page.equationCount, 0);
+  const equationVisualCount = pages.reduce((sum, page) => sum + Object.keys(page.equationAssets).length, 0);
   const figureCount = pages.reduce((sum, page) => sum + page.figures.length, 0);
   const multiColumnPages = pages.filter((page) => page.multiColumn).length;
   const linkCount = pages.reduce((sum, page) => sum + page.linkCount, 0);
@@ -939,7 +1218,7 @@ export async function convertPdf(
   const averageOcrConfidence = ocrConfidences.length ? Math.round(ocrConfidences.reduce((sum, value) => sum + value, 0) / ocrConfidences.length) : undefined;
   if (scannedPages) warnings.push(`${scannedPages} scanned or image-only page${scannedPages === 1 ? ' was' : 's were'} detected. OCR text should be proofread against the preserved visual layer.`);
   if (tableCount) warnings.push(`${tableCount} PDF table${tableCount === 1 ? ' was' : 's were'} reconstructed from aligned text anchors. Merged cells and border-only meaning should be checked against the retained page image.`);
-  if (equationCount) warnings.push('PDF equations do not contain a universal semantic LaTeX representation. Unicode mathematics was mapped heuristically; compare important formulae with the visual layer.');
+  if (equationCount) warnings.push(`PDF equations were reconstructed from character and two-dimensional geometry. ${equationVisualCount || 'No'} exact source equation crop${equationVisualCount === 1 ? ' was' : 's were'} retained; compare publication-critical LaTeX with those authoritative pixels.`);
   if (figureCount) warnings.push(`${figureCount} PDF figure${figureCount === 1 ? ' was' : 's were'} exported as separate PNG assets. Caption-led vector crops may include nearby labels so no plotted evidence is clipped.`);
   if (multiColumnPages) warnings.push(`${multiColumnPages} multi-column page${multiColumnPages === 1 ? ' was' : 's were'} reordered geometrically. Unusual floating boxes may still need manual review.`);
 
@@ -955,11 +1234,11 @@ export async function convertPdf(
     },
     {
       label: 'Equations', value: equationCount ? `${equationCount} candidates` : 'None detected', level: equationCount ? 'review' : 'high',
-      detail: equationCount ? 'Unicode symbols are translated to LaTeX, while page snapshots preserve the authoritative appearance.' : 'No math-dense lines were detected.',
+      detail: equationCount ? `LaTeX uses Unicode, baseline, script, fraction-rule and large-operator geometry. ${equationVisualCount} exact source crop${equationVisualCount === 1 ? '' : 's'} ${equationVisualCount === 1 ? 'is' : 'are'} included for direct comparison.` : 'No math-dense lines were detected.',
     },
     {
-      label: 'Visuals', value: visualPages ? `${figureCount} figures · ${visualPages} pages` : 'No visual layer', level: visualPages ? 'high' : 'medium',
-      detail: visualPages ? 'Meaningful embedded images and caption-led vector figures are cropped separately; complete high-resolution pages remain as lossless fallback evidence.' : 'No raster images, inferred tables, equations or dense vector drawings required a visual page.',
+      label: 'Visuals', value: visualPages ? `${figureCount} figures · ${equationVisualCount} equations · ${visualPages} pages` : 'No visual layer', level: visualPages ? 'high' : 'medium',
+      detail: visualPages ? 'Figures and detected equations are cropped separately; complete high-resolution pages remain as lossless fallback evidence.' : 'No raster images, inferred tables, equations or dense vector drawings required a visual page.',
     },
     {
       label: 'Layout', value: multiColumnPages ? `${multiColumnPages} multi-column` : `${headingCount} headings`, level: multiColumnPages ? 'medium' : 'high',

@@ -9,7 +9,7 @@ const UNICODE_LATEX: Record<string, string> = {
   'ω': '\\omega', 'Γ': '\\Gamma', 'Δ': '\\Delta', 'Θ': '\\Theta', 'Λ': '\\Lambda',
   'Ξ': '\\Xi', 'Π': '\\Pi', 'Σ': '\\Sigma', 'Φ': '\\Phi', 'Ψ': '\\Psi', 'Ω': '\\Omega',
   '∑': '\\sum', '∏': '\\prod', '∫': '\\int', '∬': '\\iint', '∭': '\\iiint',
-  '∮': '\\oint', '√': '\\sqrt{}', '∞': '\\infty',
+  '∮': '\\oint', '⋃': '\\bigcup', '⋂': '\\bigcap', '√': '\\sqrt{}', '∞': '\\infty',
   '∂': '\\partial', '∇': '\\nabla', '≤': '\\leq', '≥': '\\geq', '≠': '\\neq',
   '≈': '\\approx', '≃': '\\simeq', '≅': '\\cong', '≡': '\\equiv', '∼': '\\sim',
   '≪': '\\ll', '≫': '\\gg', '∝': '\\propto', '∈': '\\in', '∉': '\\notin',
@@ -20,6 +20,10 @@ const UNICODE_LATEX: Record<string, string> = {
   '↑': '\\uparrow', '↓': '\\downarrow', '±': '\\pm', '∓': '\\mp', '·': '\\cdot',
   '×': '\\times', '÷': '\\div', '∘': '\\circ', '⊕': '\\oplus', '⊗': '\\otimes',
   '⊙': '\\odot', '⊥': '\\perp', '∥': '\\parallel', '‖': '\\Vert', '∠': '\\angle',
+  '∣': '\\mid', '∗': '\\ast', '⋅': '\\cdot', '⋆': '\\star', '⋄': '\\diamond',
+  '⌈': '\\lceil', '⌉': '\\rceil', '⌊': '\\lfloor', '⌋': '\\rfloor',
+  '⟨': '\\langle', '⟩': '\\rangle', '⊤': '\\top', '⊢': '\\vdash', '⊨': '\\models',
+  '′': "'", '″': "''", '‴': "'''",
   '∴': '\\therefore', '∵': '\\because', 'ℝ': '\\mathbb{R}', 'ℕ': '\\mathbb{N}', 'ℤ': '\\mathbb{Z}',
   'ℚ': '\\mathbb{Q}', 'ℂ': '\\mathbb{C}', 'ℋ': '\\mathcal{H}', '…': '\\ldots',
   'ℓ': '\\ell', 'ℏ': '\\hbar', 'ℜ': '\\Re', 'ℑ': '\\Im',
@@ -29,6 +33,15 @@ const UNICODE_LATEX: Record<string, string> = {
   '⅙': '\\frac{1}{6}', '⅚': '\\frac{5}{6}', '⅛': '\\frac{1}{8}',
   '⅜': '\\frac{3}{8}', '⅝': '\\frac{5}{8}', '⅞': '\\frac{7}{8}',
   '−': '-',
+};
+
+const COMBINING_ACCENTS: Record<string, string> = {
+  '\u0302': '\\hat',
+  '\u0304': '\\bar',
+  '\u0303': '\\tilde',
+  '\u0307': '\\dot',
+  '\u0308': '\\ddot',
+  '\u20d7': '\\vec',
 };
 
 const SUPERSCRIPTS: Record<string, string> = {
@@ -60,30 +73,52 @@ function mappedScript(
 }
 
 export function unicodeMathToLatex(input: string): string {
-  let output = '';
-  const characters = Array.from(input.normalize('NFC'));
+  const output: string[] = [];
+  // Decompose accented letters only. Mathematical relation glyphs such as ≠
+  // also have canonical decompositions, but must stay intact for symbol maps.
+  const characters = Array.from(input.normalize('NFC')).flatMap((character) => {
+    if (UNICODE_LATEX[character] || SUPERSCRIPTS[character] || SUBSCRIPTS[character]) return [character];
+    const decomposed = Array.from(character.normalize('NFD'));
+    return decomposed.length > 1 && decomposed.slice(1).every((mark) => COMBINING_ACCENTS[mark])
+      ? decomposed
+      : [character];
+  });
   for (let index = 0; index < characters.length; index += 1) {
     const symbol = characters[index] ?? '';
+    if (COMBINING_ACCENTS[symbol]) {
+      const base = output.pop();
+      if (base?.trim()) output.push(`${COMBINING_ACCENTS[symbol]}{${base.trim()}}`);
+      continue;
+    }
     if (SUPERSCRIPTS[symbol] !== undefined) {
       const script = mappedScript(characters, index, SUPERSCRIPTS);
-      output += `^{${script.latex}}`;
+      output.push(`^{${script.latex}}`);
       index = script.end - 1;
       continue;
     }
     if (SUBSCRIPTS[symbol] !== undefined) {
       const script = mappedScript(characters, index, SUBSCRIPTS);
-      output += `_{${script.latex}}`;
+      output.push(`_{${script.latex}}`);
       index = script.end - 1;
       continue;
     }
     const replacement = UNICODE_LATEX[symbol] ?? symbol;
-    output += replacement;
+    output.push(replacement);
     const next = characters[index + 1] ?? '';
     // TeX command names consume following letters. A source such as αx must
     // become "\\alpha x", not the undefined command "\\alphax".
-    if (/^\\[A-Za-z]+$/.test(replacement) && /^[A-Za-z]$/.test(next)) output += ' ';
+    if (/^\\[A-Za-z]+$/.test(replacement) && /^[A-Za-z]$/.test(next)) output.push(' ');
   }
-  return output
+  return output.join('')
+    .replace(/<=>|<->/g, ' \\leftrightarrow ')
+    .replace(/=>/g, ' \\Rightarrow ')
+    .replace(/->/g, ' \\to ')
+    .replace(/<=/g, ' \\leq ')
+    .replace(/>=/g, ' \\geq ')
+    .replace(/!=/g, ' \\neq ')
+    .replace(/(?<!\\)\b(arcsin|arccos|arctan|sin|cos|tan|sinh|cosh|tanh|log|ln|exp|lim|sup|inf|max|min|det|gcd)\b/g, '\\$1')
+    .replace(/([_^])(?!\{)([A-Za-z0-9+-]+)/g, '$1{$2}')
+    .replace(/((?:\\partial|\\nabla)\s*[A-Za-z]|[A-Za-z0-9]+(?:_\{[^{}]+\}|\^\{[^{}]+\})*)\s*\/\s*((?:\\partial|\\nabla)\s*[A-Za-z]|[A-Za-z0-9]+(?:_\{[^{}]+\}|\^\{[^{}]+\})*)/g, '\\frac{$1}{$2}')
     .replace(/\\sqrt\{\}\s*\(([^()]*)\)/g, '\\sqrt{$1}')
     .replace(/\\sqrt\{\}\s*((?:\\[A-Za-z]+(?:\{[^{}]*})?|[A-Za-z0-9])(?:_\{[^{}]*}|\^\{[^{}]*})*)/g, '\\sqrt{$1}')
     .replace(/[\u2000-\u200A\u202F]/g, ' ')

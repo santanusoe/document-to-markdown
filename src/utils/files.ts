@@ -74,7 +74,7 @@ export async function packageResult(result: ConversionResult): Promise<Blob> {
   if (result.assets.length) {
     folder.file(
       'README.txt',
-      `Open ${stemOf(result.sourceName)}.md without moving it away from the assets folder.\n\nThe relative image links in the Markdown file resolve to ./assets/. GitHub, VS Code, Obsidian, Typora, and other GFM-compatible renderers will then display the preserved figures.\n`,
+      `Open ${stemOf(result.sourceName)}.md without moving it away from the assets folder.\n\nThe relative image links in the Markdown file resolve to ./assets/. GitHub, VS Code, Obsidian, Typora, and other GFM-compatible renderers will then display preserved figures, exact PDF equation crops, and full-page visual evidence. Equation crops are intentionally placed beside reconstructed LaTeX so publication-critical mathematics can be compared with the source pixels.\n`,
     );
   }
   folder.file(

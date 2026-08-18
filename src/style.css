@@ -218,6 +218,9 @@ main { overflow: hidden; position: relative; }
 .markdown-preview p { margin: 1em 0; }
 .markdown-preview a { color: var(--accent); }
 .markdown-preview img { max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }
+.markdown-preview p:has(> img[alt^='Source equation visual']) { margin: .75em 0 1.8em; padding: 14px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius: 11px; background: color-mix(in srgb, white 94%, var(--accent-soft)); }
+.markdown-preview p:has(> img[alt^='Source equation visual'])::before { content: 'AUTHORITATIVE PDF EQUATION CROP'; display: block; margin-bottom: 9px; color: var(--accent); font: 700 7px 'DM Mono', monospace; letter-spacing: .11em; }
+.markdown-preview img[alt^='Source equation visual'] { display: block; width: auto; max-height: 180px; margin: 0 auto; border: 0; border-radius: 4px; background: white; image-rendering: auto; }
 .markdown-preview table { border-collapse: collapse; width: max-content; min-width: 100%; max-width: 100%; display: block; overflow-x: auto; margin: 1.4em 0; }
 .markdown-preview th, .markdown-preview td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; white-space: normal; min-width: 84px; overflow-wrap: anywhere; }
 .markdown-preview th { background: var(--panel-soft); }

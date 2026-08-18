@@ -55,7 +55,7 @@ app.innerHTML = `
       <button class="nav-link" type="button" data-open-formats>Formats</button>
       <button class="nav-link" type="button" data-open-history>History</button>
       <a class="nav-link" href="https://github.com/santanusoe/document-to-markdown" target="_blank" rel="noreferrer">Source</a>
-      <button class="theme-button" type="button" data-theme aria-label="Switch colour theme"><span aria-hidden="true">◐</span></button>
+      <button class="theme-button" type="button" data-theme-toggle aria-label="Switch to dark theme" aria-pressed="false"><span data-theme-icon aria-hidden="true">◐</span></button>
     </nav>
   </header>
 
@@ -107,7 +107,7 @@ app.innerHTML = `
           <span class="local-pill">On device</span>
         </div>
         <label class="setting-row">
-          <span><strong>Preserve figures + visual pages</strong><small>Crop meaningful figures and keep the complete page as a lossless fallback.</small></span>
+          <span><strong>Preserve figures + equation evidence</strong><small>Crop each detected equation and figure, then retain the complete page as a lossless fallback.</small></span>
           <input type="checkbox" data-option="preserveVisualPages" checked /><i></i>
         </label>
         <label class="setting-row">
@@ -169,7 +169,7 @@ app.innerHTML = `
       <div class="method-grid">
         <article><span class="method-icon">¶</span><h3>Digital documents</h3><p>DOCX, PPTX, ODT and EPUB are read from their semantic XML—not flattened into screenshots.</p><small>Headings · lists · links · footnotes · media</small></article>
         <article><span class="method-icon">▦</span><h3>Tables and workbooks</h3><p>Native cells, formulae, merges and cached chart series are reconstructed deterministically.</p><small>GFM tables · HTML spans · formula comments</small></article>
-        <article><span class="method-icon">∑</span><h3>Mathematics</h3><p>Office Math becomes LaTeX structurally. PDF formulae are flagged for review and paired with the source visual.</p><small>OMML → LaTeX · MathML retained</small></article>
+        <article><span class="method-icon">∑</span><h3>Mathematics</h3><p>Office Math becomes LaTeX structurally. PDF scripts, fraction rules and operator limits use two-dimensional geometry with an exact source crop.</p><small>OMML → LaTeX · geometry + pixel evidence</small></article>
         <article><span class="method-icon">◫</span><h3>Scans and figures</h3><p>OCR runs locally. Raster figures and caption-led vector graphs are exported beside a complete page fallback.</p><small>Figure crops · local OCR · visual evidence</small></article>
       </div>
     </section>
@@ -550,11 +550,21 @@ dialog?.addEventListener('click', (event) => {
 });
 
 const storedTheme = localStorage.getItem('fidelitymd-theme');
-if (storedTheme === 'dark') document.documentElement.dataset.theme = 'dark';
-document.querySelector('[data-theme]')?.addEventListener('click', () => {
-  const dark = document.documentElement.dataset.theme !== 'dark';
-  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-  localStorage.setItem('fidelitymd-theme', dark ? 'dark' : 'light');
+const themeButton = document.querySelector<HTMLButtonElement>('button[data-theme-toggle]');
+const applyTheme = (theme: 'light' | 'dark'): void => {
+  const dark = theme === 'dark';
+  document.documentElement.dataset.theme = theme;
+  themeButton?.setAttribute('aria-pressed', String(dark));
+  themeButton?.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
+  themeButton?.setAttribute('title', dark ? 'Use light theme' : 'Use dark theme');
+  const icon = themeButton?.querySelector<HTMLElement>('[data-theme-icon]');
+  if (icon) icon.textContent = dark ? '☀' : '◐';
+};
+applyTheme(storedTheme === 'dark' ? 'dark' : 'light');
+themeButton?.addEventListener('click', () => {
+  const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  applyTheme(theme);
+  localStorage.setItem('fidelitymd-theme', theme);
 });
 
 document.querySelector('[data-open-history]')?.addEventListener('click', () => {

@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 beforeAll(async () => {
   document.body.innerHTML = '<div id="app"></div>';
+  localStorage.setItem('fidelitymd-theme', 'dark');
   Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: () => undefined });
   if (!Blob.prototype.arrayBuffer) {
     Object.defineProperty(Blob.prototype, 'arrayBuffer', {
@@ -20,6 +21,17 @@ beforeAll(async () => {
 });
 
 describe('Converter interface', () => {
+  it('changes theme only from the dedicated theme button', () => {
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    document.querySelector('main')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    const themeButton = document.querySelector<HTMLButtonElement>('button[data-theme-toggle]');
+    expect(themeButton?.getAttribute('aria-pressed')).toBe('true');
+    themeButton?.click();
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(themeButton?.getAttribute('aria-pressed')).toBe('false');
+  });
+
   it('converts the built-in semantic sample and exposes a direct Markdown download', async () => {
     expect(document.body.textContent).not.toContain('No API keys');
     expect(document.body.textContent).not.toContain('No file uploads');

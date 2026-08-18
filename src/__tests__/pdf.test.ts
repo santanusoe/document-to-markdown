@@ -58,6 +58,11 @@ function structuredPdf(): ArrayBuffer {
     'BT /F1 12 Tf 72 525 Td (Equation 1) Tj ET',
     'BT /F1 12 Tf 170 525 Td (E=mc) Tj ET',
     'BT /F1 8 Tf 202 530 Td (2) Tj ET',
+    'BT /F1 8 Tf 190 500 Td (x+1) Tj ET',
+    'BT /F1 12 Tf 72 486 Td (Equation 2 f(x) =) Tj ET',
+    'BT /F1 12 Tf 238 486 Td (+ z) Tj ET',
+    'BT /F1 8 Tf 190 473 Td (y-1) Tj ET',
+    'q 0.8 w 184 486 m 224 486 l S Q',
   ].join('\n'));
 }
 
@@ -102,6 +107,8 @@ describe('PDF converter', () => {
     expect(result.markdown).toContain('E=mc^{2}');
     expect(result.markdown).toContain('*Equation 1*');
     expect(result.markdown).not.toContain('^{Equation 1}');
+    expect(result.markdown).toContain('*Equation 2*');
+    expect(result.markdown).toContain('\\frac{x+1}{y-1}');
     expect(result.metrics.find((metric) => metric.label === 'Tables')?.value).toBe('1 detected');
     expect(result.metrics.find((metric) => metric.label === 'Layout')?.value).toContain('heading');
   });

@@ -2,7 +2,7 @@
 
 ## Privacy model
 
-FidelityMD is a static web application. Document contents are processed in browser memory and are not transmitted to a project-owned server. OCR language data may be downloaded by Tesseract.js when OCR is enabled; files and extracted text are not sent with that request.
+FidelityMD is a static web application. Document contents are processed in browser memory and are not transmitted to a project-owned server. OCR language data may be downloaded by Tesseract.js when OCR is enabled; files and extracted text are not sent with that request. Conversion history is browser-local state stored in IndexedDB (with a compact localStorage fallback), can be cleared from the interface, and is never synchronized between people or devices.
 
 ## Reporting a vulnerability
 

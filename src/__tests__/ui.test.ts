@@ -21,6 +21,10 @@ beforeAll(async () => {
 
 describe('Converter interface', () => {
   it('converts the built-in semantic sample and exposes a direct Markdown download', async () => {
+    expect(document.body.textContent).not.toContain('No API keys');
+    expect(document.body.textContent).not.toContain('No file uploads');
+    expect(document.body.textContent).not.toContain('✓ Open source');
+    expect(document.querySelector('[data-open-history]')).not.toBeNull();
     const sample = document.querySelector<HTMLButtonElement>('[data-sample]');
     expect(sample).not.toBeNull();
     sample?.click();
@@ -34,5 +38,10 @@ describe('Converter interface', () => {
     expect(source?.value).toContain('| Method | Rate | Oracle calls |');
     expect(document.querySelector('[data-download-md]')).not.toBeNull();
     expect(document.querySelectorAll('.metric-grid .metric')).toHaveLength(4);
+    await vi.waitFor(() => {
+      expect(document.querySelectorAll('.history-card')).toHaveLength(1);
+    });
+    expect(document.querySelector('.history-card')?.textContent).toContain('structured-sample.html');
+    expect(document.querySelector('.history-section')?.textContent).toContain('Each visitor sees only');
   });
 });

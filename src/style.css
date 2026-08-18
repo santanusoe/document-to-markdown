@@ -226,8 +226,9 @@ main { overflow: hidden; position: relative; }
 .markdown-preview th { background: var(--panel-soft); }
 .markdown-preview td > :first-child, .markdown-preview th > :first-child { margin-top: 0; }
 .markdown-preview td > :last-child, .markdown-preview th > :last-child { margin-bottom: 0; }
-.markdown-preview .katex-display { overflow-x: auto; overflow-y: hidden; padding: .35em 0; }
-.markdown-preview .katex { font-size: 1.06em; }
+.markdown-preview .katex-display { overflow-x: auto; overflow-y: hidden; margin: 1.25em 0 .8em; padding: 1.15em 1.3em; border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line)); border-radius: 12px; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 5%, var(--panel)), var(--panel)); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 68%, transparent); }
+.markdown-preview .katex { font-size: 1.08em; }
+.markdown-preview .katex-display > .katex { font-size: 1.32em; }
 .markdown-preview blockquote { border-left: 3px solid var(--accent); margin: 1.4em 0; padding: 4px 16px; color: var(--muted); }
 .markdown-preview pre { background: var(--panel-soft); padding: 15px; border-radius: 8px; overflow: auto; }
 .markdown-preview code { font-family: 'DM Mono', monospace; font-size: .87em; }

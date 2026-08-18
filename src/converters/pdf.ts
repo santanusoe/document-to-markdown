@@ -277,8 +277,9 @@ function pieceSequenceMath(group: TextPiece[], typicalCharacterWidth: number): s
     if (!piece) continue;
     const previous = group[index - 1];
     const gap = previous ? piece.x - (previous.x + previous.width) : 0;
-    const raised = piece.y - baseline > Math.max(1.4, baseHeight * 0.17) && piece.text.length <= 12;
-    const lowered = baseline - piece.y > Math.max(1.4, baseHeight * 0.17) && piece.text.length <= 12;
+    const adjacentToBase = Boolean(previous) && gap < Math.max(baseHeight * 1.35, typicalCharacterWidth * 3);
+    const raised = adjacentToBase && piece.y - baseline > Math.max(1.4, baseHeight * 0.17) && piece.text.length <= 12;
+    const lowered = adjacentToBase && baseline - piece.y > Math.max(1.4, baseHeight * 0.17) && piece.text.length <= 12;
     const script: '^' | '_' | undefined = raised ? '^' : lowered ? '_' : undefined;
     if (script) {
       if (openScript !== script || gap > Math.max(2, typicalCharacterWidth * 1.25)) {
@@ -451,6 +452,13 @@ function mathematicalLine(line: PdfLine, text = line.text): boolean {
   return inferredScript && text.length <= 42 && proseWords <= 1;
 }
 
+function splitEquationLabel(value: string): { label?: string; expression: string } {
+  const match = value.trim().match(/^((?:Equation|Eq\.?)\s*(?:[A-Z]?\d+|[IVXLCDM]+)[.:]?)\s+(.+)$/i);
+  return match
+    ? { label: match[1], expression: match[2] ?? '' }
+    : { expression: value };
+}
+
 function headingLevel(line: PdfLine, bodyHeight: number): number | undefined {
   const text = line.text.trim();
   if (text.length < 2 || text.length > 150 || /[.!?;:]$/.test(text) || mathematicalLine(line, text)) return undefined;
@@ -509,7 +517,9 @@ function pageLinesToMarkdown(page: PageModel, ignored: Set<string>, dehyphenate:
     }
     if (mathematicalLine(line, text)) {
       flush();
-      const equationLines = [line.mathText || text];
+      const labelled = splitEquationLabel(line.mathText || text);
+      if (labelled.label) parts.push(`*${labelled.label.replace(/\*/g, '\\*')}*`);
+      const equationLines = [labelled.expression];
       while (index + 1 < page.lines.length) {
         const nextText = lines[index + 1]?.trim() ?? '';
         const nextLine = page.lines[index + 1];
